@@ -1,0 +1,16 @@
+[package]
+name = "aval"
+description = "Ask what the current architecture decision is, and get a typed answer"
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "aval"
+path = "src/main.rs"
+
+[dependencies]
+aval-core = { workspace = true }

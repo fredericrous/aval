@@ -1,0 +1,5 @@
+dir: docs/adr
+scopes: [homelab, cloud]
+keys:
+  mesh.data-plane:
+    description: Service mesh data plane

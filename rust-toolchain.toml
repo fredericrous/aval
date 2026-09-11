@@ -1,0 +1,15 @@
+# The toolchain this repository builds with, pinned.
+#
+# CI runs `cargo clippy --all-targets -- -D warnings`, so under a floating
+# stable every clippy release is a potential breaking change: a lint added
+# upstream turns an already-merged commit red with no commit to blame it on.
+# The pin is what makes a red build attributable to a change somebody made.
+#
+# BUMPING THIS IS A DELIBERATE PR. Raise the version, run `make check`, and fix
+# the new lints in the SAME change so they are reviewed as lint fixes.
+#
+# NOT the MSRV. This is what we BUILD with; the floor the source may require is
+# `rust-version` in Cargo.toml, and CI's `msrv` job is what proves it is real.
+[toolchain]
+channel = "1.94.1"
+components = ["rustfmt", "clippy"]

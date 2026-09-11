@@ -1,0 +1,192 @@
+{
+  "description": [
+    "Conformance battery for aval. Each case names a corpus under corpora/, a query,",
+    "and the expected result. The harness MUST use `name` as the test name so a",
+    "failure names the semantic case rather than an index, MUST throw on an unknown",
+    "`query.command` rather than skipping it, and MUST assert that cases.length is at",
+    "least the `min_cases` below, because an empty or mis-parsed fixture file",
+    "otherwise passes green.",
+    "",
+    "`matched_scope` is the slot that actually answered. It differs from the queried",
+    "scope exactly when fallback to the default scope occurred, and asserting it is",
+    "how these cases distinguish an inherited answer from a scope-specific one.",
+    "",
+    "Note strings are part of the contract (SEMANTICS section 12) but are not yet",
+    "asserted here: they are fixed in Phase 2 alongside the renderer, and inventing",
+    "them before the renderer exists would pin wording nothing has reviewed."
+  ],
+  "min_cases": 25,
+  "cases": [
+    {
+      "name": "global_key_resolves_at_default_scope",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "gitops.reconciler" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0001", "matched_scope": "*" }
+    },
+    {
+      "name": "unoccupied_scope_falls_back_to_the_global_head",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "gitops.reconciler", "scope": "cloud" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0001", "matched_scope": "*" }
+    },
+    {
+      "name": "scoped_head_answers_its_own_scope",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "gitops.registry-mirror", "scope": "homelab" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0001", "matched_scope": "homelab" }
+    },
+    {
+      "name": "a_later_adr_answers_a_different_scope_of_the_same_key",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "gitops.registry-mirror", "scope": "cloud" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0015", "matched_scope": "cloud" }
+    },
+    {
+      "name": "scoped_only_key_is_undecided_at_the_default_scope",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "gitops.registry-mirror" },
+      "expected": { "verdict": "undecided", "exit": 4 },
+      "why": "Fallback runs from a named scope to the default, never the reverse. Four clusters each decided this key; none decided it globally."
+    },
+    {
+      "name": "homelab_keeps_native_routing",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "cni.routing-mode", "scope": "homelab" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0006", "matched_scope": "homelab" }
+    },
+    {
+      "name": "cloud_gets_tunnel_mode_without_disturbing_homelab",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "cni.routing-mode", "scope": "cloud" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0015", "matched_scope": "cloud" },
+      "why": "The pair with the previous case is the whole reason replaces and overrides are different edges."
+    },
+    {
+      "name": "a_scope_nobody_decided_is_undecided_not_inherited",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "cni.routing-mode", "scope": "monitor" },
+      "expected": { "verdict": "undecided", "exit": 4 }
+    },
+    {
+      "name": "replacement_within_a_slot_moves_the_head",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "storage.object-store", "scope": "homelab" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0021", "matched_scope": "homelab" }
+    },
+    {
+      "name": "replacement_leaves_the_sibling_slot_untouched",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "storage.object-store", "scope": "nas" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0009", "matched_scope": "nas" },
+      "why": "Whole-document supersession would have dropped this. It is the case that required per-slot edges."
+    },
+    {
+      "name": "a_draft_entry_does_not_win_resolution",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "storage.object-store", "scope": "homelab" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0021" },
+      "why": "ADR-0023 is a draft replacing ADR-0021. Opening a proposal must not change the current answer."
+    },
+    {
+      "name": "retirement_is_its_own_verdict",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "dns.dynamic-record-updater" },
+      "expected": { "verdict": "retired", "exit": 6, "adr": "ADR-0015", "matched_scope": "*" }
+    },
+    {
+      "name": "a_scope_inherits_a_retirement_like_any_other_head",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "dns.dynamic-record-updater", "scope": "cloud" },
+      "expected": { "verdict": "retired", "exit": 6, "adr": "ADR-0015", "matched_scope": "*" }
+    },
+    {
+      "name": "an_unchanged_global_survives_a_cluster_specific_adr",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "secrets.unseal-orchestrator", "scope": "cloud" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0004", "matched_scope": "*" },
+      "why": "ADR-0015 moved the cloud seal anchor but kept the operator. Only the anchor slot changed."
+    },
+    {
+      "name": "the_cloud_seal_anchor_is_its_own_slot",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "secrets.unseal-anchor-location", "scope": "cloud" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0015", "matched_scope": "cloud" }
+    },
+    {
+      "name": "an_unregistered_key_is_rejected_with_a_suggestion",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "storage.objectstore" },
+      "expected": { "verdict": "unknown", "exit": 7, "unknown": "key", "suggestion": "storage.object-store" }
+    },
+    {
+      "name": "an_undeclared_scope_is_rejected_never_absorbed",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "cni.routing-mode", "scope": "clodu" },
+      "expected": { "verdict": "unknown", "exit": 7, "unknown": "scope", "suggestion": "cloud" },
+      "why": "Without this guard a typo silently returns the global default, which is the failure mode typed non-answers exist to prevent."
+    },
+    {
+      "name": "a_suggestion_is_advisory_and_never_resolves",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "storage.objectstore" },
+      "expected": { "verdict": "unknown", "exit": 7, "adr": null },
+      "why": "Exit 7 must carry no ADR. A caller that acted on the suggestion would be guessing."
+    },
+    {
+      "name": "show_reports_partial_supersession",
+      "corpus": "homelab-sample",
+      "query": { "command": "show", "adr": "ADR-0014" },
+      "expected": {
+        "derived_status": "partially superseded",
+        "heads": ["forge.ssh-key-ownership", "identity.forge-username-claim"],
+        "superseded": ["forge.provisioning-topology"]
+      },
+      "why": "Closing out ADR-0014 wholesale would discard two decisions that are still authoritative."
+    },
+    {
+      "name": "show_reports_partial_supersession_across_scopes",
+      "corpus": "homelab-sample",
+      "query": { "command": "show", "adr": "ADR-0009" },
+      "expected": { "derived_status": "partially superseded" }
+    },
+    {
+      "name": "show_reports_a_draft_as_draft",
+      "corpus": "homelab-sample",
+      "query": { "command": "show", "adr": "ADR-0023" },
+      "expected": { "derived_status": "draft" }
+    },
+    {
+      "name": "a_reconciliation_absorbs_both_branches",
+      "corpus": "diamond",
+      "query": { "command": "resolve", "key": "api.gateway" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0004", "matched_scope": "*" }
+    },
+    {
+      "name": "competing_heads_are_a_verdict_not_a_broken_repository",
+      "corpus": "contradiction",
+      "query": { "command": "resolve", "key": "api.gateway" },
+      "expected": { "verdict": "contradiction", "exit": 5, "heads": ["ADR-0002", "ADR-0003"] },
+      "why": "Exit 5, not exit 3. The graph is well formed; the corpus disagrees with itself. This case is what proves exit 5 is reachable rather than masked by validation."
+    },
+    {
+      "name": "a_global_mesh_decision_answers_the_default_scope",
+      "corpus": "retire-scoped",
+      "query": { "command": "resolve", "key": "mesh.data-plane" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0001", "matched_scope": "*" }
+    },
+    {
+      "name": "a_scoped_retirement_blocks_fallback",
+      "corpus": "retire-scoped",
+      "query": { "command": "resolve", "key": "mesh.data-plane", "scope": "cloud" },
+      "expected": { "verdict": "retired", "exit": 6, "adr": "ADR-0002", "matched_scope": "cloud" },
+      "why": "Without blocking, this would inherit Istio ambient for a cluster that deliberately runs no mesh."
+    },
+    {
+      "name": "an_unretired_scope_still_inherits",
+      "corpus": "retire-scoped",
+      "query": { "command": "resolve", "key": "mesh.data-plane", "scope": "homelab" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0001", "matched_scope": "*" },
+      "why": "Paired with the previous case: retirement is scoped, not contagious."
+    }
+  ]
+}

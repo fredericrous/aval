@@ -1,0 +1,32 @@
+# Converted from homelab/docs/adr, 2026-09-11.
+# Frontmatter is a faithful conversion of what each ADR decides.
+# Bodies are stubs: this is a fixture corpus, not a copy of the documents.
+dir: docs/adr
+scopes: [homelab, monitor, nas, cloud]
+keys:
+  gitops.reconciler:
+    description: GitOps reconciler
+  gitops.registry-mirror:
+    description: Where a cluster pulls its manifest OCI artifact from
+  secrets.unseal-anchor-location:
+    description: Where the Vault seal key is anchored
+  secrets.unseal-orchestrator:
+    description: What performs the unseal
+  cni.routing-mode:
+    description: Cilium datapath routing mode
+  cni.cross-cluster-connectivity:
+    description: How clusters reach each other's services
+  cni.socket-lb-scope:
+    description: Cilium socket load-balancer scope
+  storage.object-store:
+    description: Canonical S3-compatible object store
+  forge.provisioning-topology:
+    description: Which forges receive team provisioning
+  forge.ssh-key-ownership:
+    description: Who owns user SSH public keys
+  identity.forge-username-claim:
+    description: Which OIDC claim becomes the forge username
+  dns.dynamic-record-updater:
+    description: Dynamic WAN-IP DNS record updater
+  topology.cloud-cluster:
+    description: Shape of the customer-facing cloud cluster

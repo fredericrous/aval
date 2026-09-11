@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/aval-core", "crates/aval"]
+
+# What the source is allowed to require. CI's `msrv` job is what keeps this
+# honest; a `rust-version` nobody compiles against is a comment with syntax.
+[workspace.package]
+rust-version = "1.74"
+version = "0.1.0"
+license = "MIT"
+repository = "https://github.com/fredericrous/aval"
+authors = ["Frederic Rousseau"]
+edition = "2021"
+
+# The one place the inter-crate version is written. `aval` depends on
+# `aval-core`, and crates.io resolves that by VERSION while a checkout resolves
+# it by PATH, so a manifest carrying its own literal is a release where the two
+# can disagree.
+[workspace.dependencies]
+aval-core = { path = "crates/aval-core", version = "0.1.0" }
+
+[profile.release]
+strip = true
+opt-level = "s"
+lto = true
+# `panic = "abort"` must not be added here. See amont's release_profile test for
+# the class of regression that causes.

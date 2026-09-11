@@ -1,0 +1,16 @@
+[package]
+name = "aval-core"
+description = "Decision graph and resolver for Architecture Decision Records"
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# No dependencies, deliberately. This crate runs on the pre-commit path, where
+# amont's fleet rule is that the hook binary pulls in nothing. The frontmatter
+# dialect is a restricted subset we define (SEMANTICS section 3.7), not
+# arbitrary YAML, so parsing it here buys precise line-numbered structural
+# errors that a generic deserializer does not give.
+[dependencies]
