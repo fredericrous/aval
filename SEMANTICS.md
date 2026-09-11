@@ -1,6 +1,6 @@
 # `aval` — normative semantics
 
-Version 0.4.1. This document is the specification. Where an
+Version 0.5.0. This document is the specification. Where an
 implementation and this document disagree, this document is right and the
 implementation is a bug.
 
@@ -70,8 +70,11 @@ keys:
 ```
 
 - `dir` — where numbered ADR files live, relative to the registry. Also where
-  `HEADS.md` is written.
+  `HEADS.md` is written. REQUIRED unless `packs` is non-empty: a registry that
+  only vendors keeps no records of its own and has nowhere to write a
+  projection.
 - `sources` — additional records, named outright (§2.2). Optional.
+- `packs` — vendored declarations from other repositories (§2.3). Optional.
 - `scopes` — the closed scope vocabulary. `*` is always valid and MUST NOT be
   listed.
 - `keys` — the closed key vocabulary. `description` is for humans and for the
@@ -144,6 +147,122 @@ Both shapes are first class and the choice is a repository's to make. A record
 that lives in its own file is superseded rather than edited, so its history is
 in the graph; a specification carrying its decisions is rewritten in place, so
 its history is in git. Neither is wrong, and this document does not choose.
+
+### 2.3 Packs
+
+A decision made once should be readable everywhere it applies. A registry MAY
+vendor another repository's declarations:
+
+```yaml
+packs:
+  - .adr/packs/decisions.yaml
+```
+
+- Entries are **literal repository-relative paths**, for the reasons §2.2
+  gives. A listed pack that is missing or unreadable is an error.
+- A pack file is written by `aval add` and MUST NOT be edited by hand. Its
+  content is the bytes the producing repository published, under a comment
+  banner naming the source, the revision asked for, and the commit id that
+  revision resolved to.
+- The **pack name** is the filename without its extension. It MUST satisfy the
+  slug grammar of §3.8 and MUST NOT contain `:`. Two packs MUST NOT share a
+  name. The name is carried in the path rather than in a second field, because
+  two fields that must agree are two fields that can disagree.
+
+#### What a pack carries
+
+A pack carries **declarations**: the scope vocabulary, the key definitions, and
+every record's frontmatter. It MUST NOT carry a projection, and it MUST NOT
+carry prose.
+
+`HEADS.md` is derived state, and §10's `no-manual-index` exists because copied
+derived state has no invariant behind it — nothing knows that a row which
+should be there is missing. Vendoring a projection would spread that failure
+across repositories instead of confining it to one. Vendoring declarations
+means the consumer computes heads itself, from the same graph, with the same
+code, so a superseded decision cannot survive the trip.
+
+A pack MUST NOT re-export what it vendored. A consumer that publishes its own
+pack publishes its own decisions only. Otherwise one consumer's copy of a
+decision reaches another by a route neither chose, and the qualification below
+stacks until nothing names the record it refers to.
+
+#### Identity
+
+A vendored record is referred to as `<pack>:<id>`. Qualification happens when
+the pack is read, not when it is written, so the file on disk stays byte-equal
+to what the producer published.
+
+Two repositories both numbering from `ADR-0001` is the ordinary case, not an
+edge case, and an unqualified collision would report `id-unique` against a
+corpus whose author wrote neither id.
+
+References inside a pack — `replaces`, `overrides` — are qualified with it. A
+reference that names nothing in the pack is left exactly as written, so the
+resulting finding blames the name the producer used rather than one this tool
+invented.
+
+A local record MUST NOT reference a vendored record. Editing another
+repository's graph from inside a consumer is not a supersession, and the way to
+change a vendored decision is to change it where it was made.
+
+#### What a consumer may and may not do
+
+A consumer MAY **widen** a vendored key: re-declaring it locally with a
+`scopes` list adds those scopes to the ones the pack declared. The list is what
+is being *added*, so narrowing is not something the format can express rather
+than something a check has to catch.
+
+This is the mechanism for the case that actually arises. One repository can
+hold several answers for one key — a SQL layer in the browser, another in the
+app server, a third in a second webapp — and none of them is a disagreement
+with the fleet's answer at the fleet's scope. They are different slots, and the
+fleet never decided them.
+
+A consumer MUST NOT:
+
+- re-declare a vendored key's `description` when the pack gives one;
+- list scopes for a vendored key the pack declares without a restriction, which
+  would add nothing while appearing to restrict;
+- decide a slot the pack already decides. That is two heads for one slot, and
+  §5 answers exit 5. Nothing special enforces it — it is the invariant the
+  model already had, which is why vendoring is worth doing at all.
+
+Layer C never applies to a vendored record. Those checks are about *this*
+repository — whether its citations resolve, whether its documents state a
+status twice — and a pack was checked where it was written.
+
+#### What a pack is not
+
+A pack is inert data. Nothing in it is executed, ever.
+
+This is the deliberate divergence from `amont`, whose packs vendor shell
+commands and which therefore takes consent per machine, content-keyed, and
+re-takes it whenever a single byte changes. That gate exists because running
+somebody else's command is the risk. Here, nothing runs. What a pack can do is
+change an answer, and the place to catch that is the pull request that adds the
+file — which is where a change of architectural direction belongs.
+
+The recorded commit id is **provenance, not authority**. It says the bytes are
+the ones that repository published. It says nothing about whether the decisions
+are good ones.
+
+#### Staleness is reported, never repaired
+
+A vendored pack that is behind answers `active` with a decision that was
+superseded, which is the failure this tool exists to prevent. `aval add
+--check` re-resolves each recorded revision and reports whether it still names
+the recorded commit.
+
+It reaches the network, so **no hook, gate or `resolve` may call it**, and none
+does. A corpus that needed the network to answer a question would be useless
+offline and unusable in a CI job with no credential for the source — which is
+the ordinary case, not a corner of it: the corpus this was built for is private
+on one forge and read by repositories on another.
+
+The consequence is a real cost and is stated rather than hidden: when a fleet
+decision changes, each consumer is updated by a person running `aval add`
+again, and reading the diff.
 
 ---
 
@@ -537,6 +656,8 @@ answering a question.
 | Check | Rejects |
 |---|---|
 | `frontmatter-parses` | absent or malformed frontmatter, unknown field |
+| `pack-parses` | a vendored pack that is malformed, or two packs sharing a name (§2.3) |
+| `pack-key-widens` | a local re-declaration of a vendored key that does anything but widen it (§2.3) |
 | `id-unique` | two documents claiming one id |
 | `id-matches-filename` | `id` disagreeing with the filename prefix, or an unusable slug (§3.8) |
 | `key-registered` | a key absent from the registry |
@@ -562,6 +683,7 @@ answering a question.
 | Check | Reports |
 |---|---|
 | `heads-fresh` | `HEADS.md` not matching the projection after canonicalisation (§12.2) |
+| `pack-fresh` | a published `aval.pack` not matching the declarations this corpus states (§2.3) |
 | `links-resolve` | an unpinned citation that does not resolve (§11) |
 | `status-single-source` | a prose status line claiming approval the frontmatter already owns |
 | `no-manual-index` | a hand-maintained ADR index table |
@@ -765,11 +887,22 @@ Low codes follow the duro CLI. Verdicts start at 4.
 | `aval history` | A | `0` · `2` · `3` · `7` |
 | `aval hook install` | — | `0` · `1` write failed · `2` · `3` unreadable settings |
 | `aval hook install --check` | — | `0` wired · `1` stale · `2` · `3` |
+| `aval pack` | A | `0` · `2` · `3` |
+| `aval pack --write` | A | `0` · `1` write failed · `2` · `3` |
+| `aval pack --check` | A + C | `0` fresh or not publishing · `1` stale · `2` · `3` |
+| `aval add` | A | `0` · `1` unreachable, ambiguous, or refused · `2` · `3` |
+| `aval add --check` | A | `0` current or unknown · `1` behind · `2` · `3` |
 
 `hook install` reads no corpus and touches no layer. It wires a session-start
 hook that runs `heads`; whether the corpus resolves is that command's business,
 and the generated script stays **silent** when it does not, because a session
 must not fail over a tool the person who started it has not installed.
+
+`aval add --check` reports `0` when a pack's standing cannot be determined —
+offline, moved, access lost. Being unable to ask is not an answer, and a
+verdict of "behind" that was really "I could not reach the remote" would teach
+its caller to ignore the one that matters. It says so in words and counts it
+separately.
 
 `check` deliberately reports `1` for any finding regardless of layer, because
 its caller is a git hook, where amont's contract is that `0` passes and anything

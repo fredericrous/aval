@@ -37,7 +37,20 @@ fn display_path(l: &Loaded) -> String {
     format!("{}/{}", l.graph.registry().dir, HEADS)
 }
 
+/// Whether this corpus has a projection at all.
+///
+/// A registry that only vendors packs keeps no records and has no `dir`, so
+/// there is nowhere to put `HEADS.md` and nothing about the consumer for it to
+/// state. `aval heads` still prints the fleet's heads to stdout, which is what
+/// the session hook reads; what does not exist is a file to keep fresh.
+pub fn applies(l: &Loaded) -> bool {
+    l.graph.registry().has_dir()
+}
+
 pub fn freshness(l: &Loaded) -> Freshness {
+    if !applies(l) {
+        return Freshness::Current;
+    }
     let want = project::render(&l.graph);
     let Ok(have) = std::fs::read_to_string(path(l)) else {
         return Freshness::Missing;

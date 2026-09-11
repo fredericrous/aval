@@ -586,6 +586,7 @@ mod base_tests {
                 registry: aval_core::model::Registry {
                     dir: "docs/adr".into(),
                     sources: Vec::new(),
+                    packs: Vec::new(),
                     scopes: Vec::new(),
                     keys: Vec::new(),
                 },
@@ -595,6 +596,7 @@ mod base_tests {
             root: PathBuf::from(root),
             adr_dir: PathBuf::from(root).join("docs/adr"),
             files: Vec::new(),
+            packs: Vec::new(),
         }
     }
 

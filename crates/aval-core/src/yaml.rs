@@ -140,12 +140,45 @@ fn lex(src: &str) -> Result<Vec<Line>, YamlError> {
 
 /// Strip a trailing comment. A `#` only opens one when preceded by whitespace,
 /// so `choice: a#b` keeps its hash and `choice: a # b` does not.
+///
+/// A `#` inside quotes opens nothing. Without that, `choice: "Kong # the
+/// gateway"` was silently truncated to `Kong` — the value parsed, so no check
+/// fired, and the projection stated a decision nobody wrote. Quoting is the
+/// documented way to protect a value, so it has to actually protect it.
+///
+/// A quote opens a scalar only as the first non-space byte, which is the same
+/// rule `scalar` applies when it decides a value is quoted at all. Without it,
+/// the apostrophe in `choice: it's fine # note` would open a string that never
+/// closes and the comment would survive into the value.
 fn strip_comment(s: &str) -> &str {
     let b = s.as_bytes();
+    let start = b.iter().position(|c| *c != b' ' && *c != b'\t');
     let mut i = 0;
+    let mut quote: Option<u8> = None;
     while i < b.len() {
-        if b[i] == b'#' && (i == 0 || b[i - 1] == b' ' || b[i - 1] == b'\t') {
-            return s[..i].trim_end();
+        match quote {
+            // Inside `"`, a backslash escapes the next byte; inside `'`, a
+            // doubled quote does. Both mirror what `scalar` decodes, so this
+            // agrees with the value that actually comes out.
+            Some(b'"') => match b[i] {
+                b'\\' => i += 1,
+                b'"' => quote = None,
+                _ => {}
+            },
+            Some(_) => {
+                if b[i] == b'\'' {
+                    if i + 1 < b.len() && b[i + 1] == b'\'' {
+                        i += 1;
+                    } else {
+                        quote = None;
+                    }
+                }
+            }
+            None if Some(i) == start && (b[i] == b'"' || b[i] == b'\'') => quote = Some(b[i]),
+            None if b[i] == b'#' && (i == 0 || b[i - 1] == b' ' || b[i - 1] == b'\t') => {
+                return s[..i].trim_end()
+            }
+            None => {}
         }
         i += 1;
     }
