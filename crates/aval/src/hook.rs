@@ -15,6 +15,15 @@
 //!   already contains, on the same code path the pre-commit gate runs, so
 //!   caching would only add a way to be stale.
 //! - **Nothing to add to `.gitignore`**, because nothing is written at runtime.
+//!
+//! The preamble's last paragraph is there because of a specific mistake made
+//! while building this. Two sync transports were live in one repository, each
+//! documented as current, and the conversion recorded them as one decision per
+//! mode. They were not: one had replaced the other and the code had not caught
+//! up. The evidence in the repository was equally consistent with both
+//! readings, so no amount of reading it harder would have helped — the fix is
+//! to ask, and the preamble is where that instruction reaches an agent at the
+//! moment it matters.
 
 use aval_core::json::{self, Json};
 use std::path::{Path, PathBuf};
@@ -60,6 +69,11 @@ to end.
 
 To change one, write a record that `replaces` it. Editing the old record is
 not how supersession works here, and `aval check` will say so.
+
+What is deployed is not what was decided. Two implementations both running is
+not evidence that both were chosen — it is equally consistent with one having
+replaced the other and the code not having caught up. Ask someone; do not
+infer a decision from what is running.
 PREAMBLE
 
 echo

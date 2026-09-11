@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## v0.4.1
+
+One paragraph added to the session hook's preamble, and it is there because of
+a specific mistake made while building this:
+
+> What is deployed is not what was decided. Two implementations both running is
+> not evidence that both were chosen — it is equally consistent with one having
+> replaced the other and the code not having caught up. Ask someone; do not
+> infer a decision from what is running.
+
+Two sync transports were live in one repository, each documented as current,
+and the conversion recorded them as one decision per mode. They were not: one
+had replaced the other and the code had not caught up. The repository's own
+evidence was equally consistent with both readings, so reading it harder would
+not have helped — the fix is to ask, and the preamble is where that instruction
+reaches an agent at the moment it matters.
+
+Deliberately unconditional rather than triggered. The shape is detectable — a
+key with entries at two non-default scopes, both `first`, no edge between them
+— and it does not discriminate: sre-agent's `lane.product` has exactly that
+shape and is correct. A check on it would fire on clean corpora, and `check`
+has no warning tier.
+
+**This changes the generated script, so `aval hook install --check` reports
+stale in every repository that has one until `aval hook install` is run
+there.** That is the upgrade lever working as designed, not a fault.
+
 ## v0.4.0
 
 **`aval hook install`** — a session-start hook that prints the current decision
