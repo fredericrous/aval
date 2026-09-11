@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## v0.1.1
+
+Fixes two release-workflow bugs that stopped v0.1.0 publishing anything. No
+change to the tool itself.
+
+**The audit gate failed on a clean dependency tree.** Its exit-code logic is
+written deliberately without `set -e` so it can tell "found vulnerabilities"
+apart from "could not check" — but GitHub's default shell adds `-e`, so the
+step aborted before any of that ran. It died on the good case: `grep` exits 1
+when it matches nothing, `pipefail` propagates that into the assignment, and
+`-e` killed the step. A tree with no advisories was the one input that could
+not pass. This is latent in amont too, hidden only because its tree carries two
+warning-class advisories, so its grep always matches.
+
+**Two cross-compilation targets timed out on apt.** The step pinned
+archive.ubuntu.com because amont had seen the Azure mirror hang; this time
+archive.ubuntu.com was the one hanging. It no longer picks a winner: it tries
+the runner's own mirror, falls back to the canonical archive, and says which
+one answered.
+
 ## v0.1.0
 
 First release. The resolver, the invariants, the projection and the CLI, proved
