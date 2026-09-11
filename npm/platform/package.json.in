@@ -1,0 +1,27 @@
+{
+  "name": "__PKG__",
+  "version": "__VERSION__",
+  "description": "The aval binary for __OS__/__CPU__",
+  "homepage": "https://github.com/fredericrous/aval#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fredericrous/aval.git"
+  },
+  "license": "MIT",
+  "author": "Frederic Rousseau",
+  "preferUnplugged": true,
+  "_comment_access": "Scoped packages default to RESTRICTED. The workflow passes --access public, and this says the same thing in the manifest so a hand-run `npm publish` from dist/ cannot quietly publish six private packages the root then cannot resolve.",
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "__OS__"
+  ],
+  "cpu": [
+    "__CPU__"
+  ],
+__LIBC__
+  "files": [
+    "bin/"
+  ]
+}

@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## v0.1.0
+
+First release. The resolver, the invariants, the projection and the CLI, proved
+against a real corpus rather than a synthetic one: `homelab/docs/adr`, eighteen
+decision records, `aval check` clean.
+
+**What it does.** `aval resolve <key>` answers what is decided now, with a typed
+answer and typed non-answers, so a caller branches on an exit code instead of
+reading three documents and reasoning its way to a plausible wrong one. Exit 0
+active, 4 undecided, 5 contradiction, 6 retired, 7 unknown. Codes 1, 2 and 3
+mean the tool failed, was misused, or could not read the corpus, and never
+share a range with a verdict.
+
+**What is normative.** `SEMANTICS.md`, which ships in the release archive. Read
+that before the README if you intend to write ADRs against this.
+
+**Known limits of this release.** There is no cross-corpus resolution: one
+registry, one directory, no shared vocabulary between repositories. The
+frontmatter dialect is a defined subset of YAML rather than all of it, and
+anything outside it is rejected with a line number rather than guessed at. The
+MCP server is specified but unbuilt.
+
+Sections below record how it was built, and are kept because each names a
+mistake worth not repeating.
+
 ### Phase 0 — specification
 
 - `SEMANTICS.md`: the normative specification. Decision keys, flat scopes, slots
