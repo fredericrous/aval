@@ -1,6 +1,6 @@
 # `aval` — normative semantics
 
-Version 0.3.0. This document is the specification. Where an
+Version 0.3.1. This document is the specification. Where an
 implementation and this document disagree, this document is right and the
 implementation is a bug.
 

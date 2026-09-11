@@ -323,6 +323,22 @@ fn gitlinks(root: &Path) -> Vec<String> {
         .collect()
 }
 
+/// The base a citation resolves against.
+///
+/// A document-relative link, or one written `./` or `../`, resolves beside the
+/// document. A bare backticked token resolves from the repository root — that
+/// is what the "first segment is a top-level entry" rule established about it.
+/// All three consumers must agree, or the gitlink skip is computed against a
+/// different base than the existence check and stops matching.
+fn base_for<'a>(l: &'a Loaded, doc_dir: &'a Path, c: &Cite) -> &'a Path {
+    let t = without_line_suffix(without_fragment(&c.target));
+    if t.starts_with("./") || t.starts_with("../") || c.document_relative {
+        doc_dir
+    } else {
+        l.root.as_path()
+    }
+}
+
 /// The directory a document's relative links resolve against.
 ///
 /// Per document, not per corpus. Records may live in more than one directory
@@ -411,7 +427,8 @@ pub fn check(l: &Loaded) -> Vec<Finding> {
             if escapes_repo(l, &doc_dir, &c) || resolves(l, &doc_dir, &c) {
                 continue;
             }
-            let normalised = repo_relative(l, &doc_dir, without_line_suffix(without_fragment(t)));
+            let base = base_for(l, &doc_dir, &c);
+            let normalised = repo_relative(l, base, without_line_suffix(without_fragment(t)));
             if links.iter().any(|g| normalised.starts_with(g.as_str())) {
                 continue;
             }
@@ -555,5 +572,96 @@ mod tests {
     fn a_fragment_is_stripped_before_the_file_is_checked() {
         assert_eq!(without_fragment("a/b.md#head"), "a/b.md");
         assert_eq!(without_fragment("a/b.md"), "a/b.md");
+    }
+}
+
+#[cfg(test)]
+mod base_tests {
+    use super::*;
+
+    fn loaded_at(root: &str) -> Loaded {
+        // Only `root` is read by the functions under test.
+        Loaded {
+            graph: aval_core::graph::Graph::build(aval_core::model::Corpus {
+                registry: aval_core::model::Registry {
+                    dir: "docs/adr".into(),
+                    sources: Vec::new(),
+                    scopes: Vec::new(),
+                    keys: Vec::new(),
+                },
+                adrs: Vec::new(),
+            })
+            .expect("empty corpus"),
+            root: PathBuf::from(root),
+            adr_dir: PathBuf::from(root).join("docs/adr"),
+            files: Vec::new(),
+        }
+    }
+
+    /// The regression this exists for. A backticked token resolves from the
+    /// repository root, and the gitlink skip compares a repository-relative
+    /// prefix. Computing that prefix from the document's directory instead
+    /// produced `docs/adr/vault-transit-unseal-operator/...`, which matched no
+    /// submodule, so every citation into a submodule was reported dangling.
+    /// Found by running against homelab rather than by a test, which is why
+    /// there is now a test.
+    #[test]
+    fn a_root_relative_token_is_not_rebased_on_the_document() {
+        let l = loaded_at("/repo");
+        let doc_dir = PathBuf::from("/repo/docs/adr");
+        let c = Cite {
+            target: "vault-transit-unseal-operator/README.md".into(),
+            line: 1,
+            document_relative: false,
+        };
+        let base = base_for(&l, &doc_dir, &c);
+        assert_eq!(base, Path::new("/repo"));
+        assert_eq!(
+            repo_relative(&l, base, &c.target),
+            "vault-transit-unseal-operator/README.md"
+        );
+    }
+
+    #[test]
+    fn a_document_relative_link_resolves_beside_its_document() {
+        let l = loaded_at("/repo");
+        let doc_dir = PathBuf::from("/repo/docs/architecture");
+        let c = Cite {
+            target: "./diagram.svg".into(),
+            line: 1,
+            document_relative: true,
+        };
+        let base = base_for(&l, &doc_dir, &c);
+        assert_eq!(base, Path::new("/repo/docs/architecture"));
+        assert_eq!(
+            repo_relative(&l, base, &c.target),
+            "docs/architecture/diagram.svg"
+        );
+    }
+
+    #[test]
+    fn a_parent_reference_climbs_out_of_the_documents_directory() {
+        let l = loaded_at("/repo");
+        let doc_dir = PathBuf::from("/repo/docs/adr");
+        let c = Cite {
+            target: "../architecture/storage.md".into(),
+            line: 1,
+            document_relative: true,
+        };
+        let base = base_for(&l, &doc_dir, &c);
+        assert_eq!(
+            repo_relative(&l, base, &c.target),
+            "docs/architecture/storage.md"
+        );
+    }
+
+    #[test]
+    fn document_dir_is_the_documents_own_directory() {
+        let l = loaded_at("/repo");
+        assert_eq!(
+            document_dir(&l, "docs/specs/notes.md"),
+            PathBuf::from("/repo/docs/specs")
+        );
+        assert_eq!(document_dir(&l, "NOTES.md"), PathBuf::from("/repo"));
     }
 }
