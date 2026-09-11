@@ -5,7 +5,7 @@
 //! section 14. The rule that shapes all of them is that a code meaning "I could
 //! not reach a verdict" never shares a range with a verdict.
 
-use aval::{heads, hook, links, load, migrate, provenance, render, status};
+use aval::{add, heads, hook, links, load, migrate, packfile, provenance, render, status};
 
 use aval_core::graph::Verdict;
 use aval_core::json::Json;
@@ -27,9 +27,17 @@ USAGE
     aval history <key> [--scope <scope>]   the chain, which is history not authority
     aval migrate <dir>                     report what converting a legacy corpus needs
     aval hook install [--check]            put the heads in front of an agent
+    aval pack [--write | --check]          this corpus's declarations, for others to read
+    aval add <source>… [--dry-run]         vendor another repository's declarations
+    aval add --check                       are the vendored packs still current
+
+SOURCES
+    github:owner/repo   forgejo:host/owner/repo   <git-url>   <path>
+    each optionally @<rev>; the commit id is what gets recorded
 
 OPTIONS
     --json        machine output on stdout, warnings suppressed
+    --as <name>   name one vendored pack (add only); it becomes the id prefix
     -C <dir>      run as if started in <dir>
     -h, --help    this
     -V, --version version
@@ -49,9 +57,11 @@ struct Args {
     command: String,
     positional: Vec<String>,
     scope: Option<String>,
+    as_name: Option<String>,
     json: bool,
     write: bool,
     check: bool,
+    dry_run: bool,
     dir: PathBuf,
 }
 
@@ -60,9 +70,11 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         command: String::new(),
         positional: Vec::new(),
         scope: None,
+        as_name: None,
         json: false,
         write: false,
         check: false,
+        dry_run: false,
         dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     };
     let mut i = 0;
@@ -72,10 +84,16 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--json" => a.json = true,
             "--write" => a.write = true,
             "--check" => a.check = true,
+            "--dry-run" => a.dry_run = true,
             "--scope" => {
                 i += 1;
                 a.scope = Some(argv.get(i).ok_or("`--scope` needs a value")?.clone());
             }
+            "--as" => {
+                i += 1;
+                a.as_name = Some(argv.get(i).ok_or("`--as` needs a name")?.clone());
+            }
+            s if s.starts_with("--as=") => a.as_name = Some(s[5..].to_string()),
             "-C" => {
                 i += 1;
                 a.dir = PathBuf::from(argv.get(i).ok_or("`-C` needs a directory")?);
@@ -177,6 +195,8 @@ fn run(args: Args) -> i32 {
         "history" => cmd_history(&args),
         "migrate" => cmd_migrate(&args),
         "hook" => cmd_hook(&args),
+        "pack" => cmd_pack(&args),
+        "add" => cmd_add(&args),
         other => {
             eprintln!("aval: unknown command `{}`", other);
             eprint!("{}", USAGE);
@@ -248,10 +268,28 @@ fn cmd_resolve(args: &Args) -> i32 {
             .collect(),
         _ => Vec::new(),
     };
+    // Which pack the answer came from, when it came from one. A consumer has
+    // to be able to tell a decision it can change from one it cannot, and
+    // reading the id prefix works only for somebody who already knows the
+    // convention.
+    let from_pack = verdict
+        .adr()
+        .and_then(|id| l.graph.corpus().adr(id))
+        .and_then(|a| a.pack.clone());
+
     if args.json {
-        println!("{}", render::verdict_json(&verdict, slot, &prov));
+        println!(
+            "{}",
+            render::verdict_json(&verdict, slot, &prov).set_opt("pack", from_pack)
+        );
     } else {
         print!("{}", render::verdict_text(&verdict, slot, &prov));
+        if let Some(p) = &from_pack {
+            println!(
+                "  vendored: from the `{}` pack; change it there, not here",
+                p
+            );
+        }
         let _ = std::io::stdout().flush();
     }
     verdict.exit()
@@ -268,6 +306,7 @@ fn cmd_check(args: &Args) -> i32 {
     findings.extend(links::check(&l));
     findings.extend(heads::findings(&l));
     findings.extend(status::check(&l));
+    findings.extend(packfile::findings(&l));
     findings.extend(manual_index(&l));
     findings.sort_by_key(|a| (a.layer, a.file.clone(), a.line));
 
@@ -308,6 +347,12 @@ fn cmd_check(args: &Args) -> i32 {
 /// possible invariant: nothing knows a missing row should have existed. The
 /// projection replaces it.
 fn manual_index(l: &Loaded) -> Vec<Finding> {
+    // No `dir` means `adr_dir` is the repository root, and the repository's own
+    // README is not an ADR index. Checking it would report a link table in
+    // somebody's project readme as a corpus defect.
+    if !l.graph.registry().has_dir() {
+        return Vec::new();
+    }
     let readme = l.adr_dir.join("README.md");
     let Ok(src) = std::fs::read_to_string(&readme) else {
         return Vec::new();
@@ -345,6 +390,17 @@ fn cmd_heads(args: &Args) -> i32 {
     };
     let text = project::render(&l.graph);
     let path = l.adr_dir.join(load::HEADS);
+    if (args.write || args.check) && !heads::applies(&l) {
+        // A registry that only vendors keeps no records and declares no `dir`,
+        // so there is nowhere to put the file. `aval heads` on its own still
+        // prints the borrowed heads, which is what the session hook reads.
+        eprintln!(
+            "aval: this registry declares no `dir`, so there is nowhere to write \
+             {}; `aval heads` prints them instead",
+            load::HEADS
+        );
+        return E_USAGE;
+    }
     if args.write {
         // Content-idempotent: a file that already states the projection keeps
         // its bytes, so a formatter's padding is not undone on every run and
@@ -493,6 +549,281 @@ fn cmd_hook(args: &Args) -> i32 {
             println!("  !{}", p);
         }
     }
+    0
+}
+
+/// `aval pack` — publish this corpus's declarations.
+fn cmd_pack(args: &Args) -> i32 {
+    if args.write && args.check {
+        eprintln!("aval: `--write` and `--check` are mutually exclusive");
+        return E_USAGE;
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    let path = packfile::path(&l);
+    if args.write {
+        match packfile::write(&l) {
+            Ok(packfile::Wrote::Unchanged) => {
+                println!("aval: {} already current", path.display());
+                0
+            }
+            Ok(packfile::Wrote::Written) => {
+                println!("aval: wrote {}", path.display());
+                0
+            }
+            Err(e) => {
+                emit_error(
+                    args,
+                    E_FAIL,
+                    &format!("{}: {}", path.display(), e),
+                    Vec::new(),
+                );
+                E_FAIL
+            }
+        }
+    } else if args.check {
+        let f = packfile::findings(&l);
+        if f.is_empty() {
+            if !packfile::publishes(&l) {
+                println!("aval: this corpus publishes no pack");
+            } else {
+                println!("aval: {} is current", aval_core::pack::FILE);
+            }
+            0
+        } else {
+            for x in &f {
+                println!("{}", x);
+            }
+            E_FAIL
+        }
+    } else {
+        print!("{}", packfile::render(&l));
+        0
+    }
+}
+
+/// `aval add --check` — are the vendored packs still what their revisions name?
+///
+/// This is the one thing `amont` deliberately does not have, and the reason
+/// for the difference is the payload. Its vendored rows are commands, so being
+/// behind is safe and updating is the risk. A vendored *decision* is the other
+/// way round: being behind means answering `active` with something that was
+/// superseded, which is precisely the failure the whole tool exists to
+/// prevent.
+///
+/// It reaches the network, so it is human-run and nothing calls it. The gate
+/// does not, the hook does not, and CI cannot — the corpus this was built for
+/// is private on a forge the consumers' CI has no credential for. That is a
+/// real cost, and it is stated rather than papered over: a fleet decision that
+/// changes has to be re-added in each consumer, by a person, on purpose.
+fn cmd_add_check(args: &Args) -> i32 {
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    let packs = &l.graph.registry().packs;
+    if packs.is_empty() {
+        println!("aval: this repository vendors no packs");
+        return 0;
+    }
+
+    let mut behind = 0;
+    let mut unknown = 0;
+    for o in add::origins(&l.root, packs) {
+        let o = match o {
+            Ok(o) => o,
+            Err(e) => {
+                println!("  {:<9} {}", "unmarked", e);
+                unknown += 1;
+                continue;
+            }
+        };
+        match add::standing(&o) {
+            add::Standing::Current => println!(
+                "  {:<9} {} @ {}  ({})",
+                "current",
+                o.name,
+                aval::fetch::short(&o.commit),
+                o.source
+            ),
+            add::Standing::Behind(now) => {
+                behind += 1;
+                println!(
+                    "  {:<9} {} has {}, {} now names {}",
+                    "behind",
+                    o.name,
+                    aval::fetch::short(&o.commit),
+                    o.rev,
+                    aval::fetch::short(&now)
+                );
+            }
+            add::Standing::Unknown(e) => {
+                unknown += 1;
+                println!("  {:<9} {}: {}", "unknown", o.name, first_line(&e));
+            }
+            add::Standing::Unmarked => {
+                unknown += 1;
+                println!(
+                    "  {:<9} {}: `{}` is not a source this version understands",
+                    "unknown", o.name, o.source
+                );
+            }
+        }
+    }
+
+    if behind == 0 {
+        if unknown > 0 {
+            println!(
+                "\n{} pack(s) could not be checked. Being unable to ask is not an answer.",
+                unknown
+            );
+        }
+        return 0;
+    }
+    println!(
+        "\n{} pack(s) behind. Run `aval add <source>` for each, read the diff, \
+         then `aval heads --write`.",
+        behind
+    );
+    E_FAIL
+}
+
+fn first_line(s: &str) -> &str {
+    s.lines().next().unwrap_or(s)
+}
+
+/// `aval add` — vendor another repository's declarations.
+///
+/// Every source is resolved, fetched and parsed before any of them is written,
+/// so a second source that turns out to be unreachable does not leave the first
+/// one half-installed.
+fn cmd_add(args: &Args) -> i32 {
+    if args.check {
+        return cmd_add_check(args);
+    }
+    if args.positional.is_empty() {
+        eprintln!(
+            "aval: `add` needs a source (github:owner/repo, \
+             forgejo:host/owner/repo, a git URL, or a path)"
+        );
+        return E_USAGE;
+    }
+    if args.as_name.is_some() && args.positional.len() > 1 {
+        eprintln!("aval: `--as` names one pack; add them one at a time");
+        return E_USAGE;
+    }
+    let root = match load::find_root(&args.dir) {
+        Some(r) => r,
+        None => {
+            eprintln!(
+                "aval: no {} in {} or any parent directory — a pack is vendored \
+                 into a corpus, so there has to be one",
+                load::REGISTRY,
+                args.dir.display()
+            );
+            return E_INVALID;
+        }
+    };
+
+    let mut vendored = Vec::new();
+    for spec in &args.positional {
+        match add::resolve_one(spec, args.as_name.as_deref()) {
+            Ok(v) => vendored.push(v),
+            Err(e) => {
+                eprintln!("aval: {}", e);
+                return E_FAIL;
+            }
+        }
+    }
+
+    // Plan everything, then print, then write. A collision must stop the whole
+    // command rather than the one source that hit it.
+    let mut plans = Vec::new();
+    for v in &vendored {
+        match add::plan(&root, v) {
+            Ok(add::Plan::Collision(other)) => {
+                eprintln!(
+                    "aval: {} already holds {}, which came from {} — name this \
+                     one with `--as <name>`",
+                    v.rel, v.name, other
+                );
+                return E_FAIL;
+            }
+            Ok(p) => plans.push(p),
+            Err(e) => {
+                eprintln!("aval: {}", e);
+                return E_FAIL;
+            }
+        }
+    }
+
+    for (v, p) in vendored.iter().zip(&plans) {
+        let state = match p {
+            add::Plan::New => "new",
+            add::Plan::Unchanged => "unchanged",
+            add::Plan::Update(old) => &format!("was {}", aval::fetch::short(old)),
+            add::Plan::Collision(_) => unreachable!("returned above"),
+        };
+        println!(
+            "{} @ {} ({}) declares {} record(s), {} key(s):",
+            v.source.label,
+            aval::fetch::short(&v.id),
+            state,
+            v.records,
+            v.keys.len()
+        );
+        for k in &v.keys {
+            println!("    {}", k);
+        }
+    }
+
+    if args.dry_run {
+        println!("\n--dry-run: nothing written");
+        return 0;
+    }
+
+    let mut registered = Vec::new();
+    for v in &vendored {
+        match add::write(&root, v) {
+            Ok(newly) => {
+                if newly {
+                    registered.push(v.rel.clone());
+                }
+            }
+            Err(e) => {
+                eprintln!("aval: {}", e);
+                return E_FAIL;
+            }
+        }
+    }
+
+    println!();
+    for v in &vendored {
+        println!("  wrote {}", v.rel);
+    }
+    for r in &registered {
+        println!("  listed {} in {}", r, load::REGISTRY);
+    }
+
+    // A vendored decision is decided here, so it belongs in the projection —
+    // which means the projection is now out of date, and the gate will say so
+    // at the least convenient moment. Say it here instead.
+    if let Ok(l) = load::load(&root) {
+        if heads::applies(&l) && !heads::findings(&l).is_empty() {
+            println!("  stale  {}/{}", l.graph.registry().dir, load::HEADS);
+            println!("\nThe projection now has rows it did not have. Run `aval heads --write`.");
+        }
+    }
+
+    println!();
+    println!(
+        "These decisions are not yours to edit. To change one, change it in the \
+         repository\nit came from and run `aval add` again; a local record \
+         deciding the same slot is a\ncontradiction, which is what makes one \
+         decision one decision."
+    );
     0
 }
 

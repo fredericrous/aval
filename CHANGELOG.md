@@ -2,6 +2,89 @@
 
 ## Unreleased
 
+## v0.5.0
+
+Vendoring, so a decision made once can be read from the repositories it
+applies to.
+
+Nine fleet decisions lived in one repository and were readable from exactly
+that repository. Six others restated a subset of them in prose, and one of
+those copies had already diverged. That is the duplication this tool was built
+to end, reproducing itself while the tool sat somewhere none of them could
+read.
+
+**`aval pack`** publishes a corpus's declarations — the scope vocabulary, the
+key definitions, and every record's frontmatter — to `aval.pack` at the
+repository root. Not the projection: `HEADS.md` is derived state, and
+`no-manual-index` exists precisely because copied derived state has no
+invariant behind it. A consumer computes the heads itself, from the same graph,
+with the same code, so a superseded decision cannot survive the trip. The nine
+fleet records come to 3.7 KB.
+
+**`aval add <source>`** vendors one into `.adr/packs/<name>.yaml` and lists it
+under a new registry key, `packs:`. `dir` is now optional when `packs` is
+present, so a repository can read the fleet corpus without starting one of its
+own — which is the cheapest possible adoption and the only one four of those
+six were ever going to make.
+
+Records arrive namespaced: `ADR-0002` from the `decisions` pack is
+`decisions:ADR-0002`. Two repositories both numbering from one is the ordinary
+case, and an unqualified collision would report `id-unique` against a corpus
+whose author wrote neither id. Qualification happens on read, so the vendored
+file stays byte-equal to what the producer published.
+
+**Divergence, and the shape it actually takes.** A consumer may *widen* a
+vendored key — re-declaring it locally with a `scopes` list adds those scopes.
+The list is what is being added, so narrowing is not something the format can
+say. This is the case that arises in practice: one repository holds several SQL
+layers, one in the browser and one in the app server, and neither disagrees
+with the fleet's answer at the fleet's scope. They are different slots.
+
+Deciding a slot the pack already decides is two heads for one slot — exit 5,
+through the invariant the model already had. Nothing new enforces it, which is
+the reason vendoring is worth doing.
+
+**Transport is git and nothing else**, structured after `amont`'s and for its
+stated reason: this binary links no crates, has no TLS stack, and runs on the
+pre-commit path. git is already a hard dependency and is content-addressed, so
+`@v1` is resolved to a commit id before anything is fetched and whatever
+arrives is refused unless it hashes to that id. It also answers the credential
+question by not asking it — the fleet corpus is private on one forge and read
+by repositories on another that sits behind a client certificate, and shelling
+out to `git` means both work with the user's own credentials and none of this
+tool's. No token was minted for any of it.
+
+**No trust prompt, deliberately.** `amont add` vendors commands, so it takes
+consent per machine and re-takes it on every byte that changes. A pack is inert
+data; nothing in it is ever executed. What it can do is change an answer, and
+the review gate for that is the pull request that adds the file.
+
+**Staleness is reported, never repaired.** `amont` does not check whether a
+vendored block is behind, because its rows are commands and being behind is the
+safe direction. Here it is the opposite: a stale pack answers `active` with a
+decision that was superseded, which is the failure the whole tool exists to
+prevent. `aval add --check` re-resolves each recorded revision and says whether
+it still names the recorded commit. It reaches the network, so no hook, gate or
+`resolve` calls it, and none can — the consumers' CI has no credential for the
+source. The fanout after a fleet decision changes is manual, per repository,
+and is now written down as a cost rather than left to be discovered.
+
+Also in this release:
+
+- `pack-fresh`, a Layer C check, so a producer cannot publish declarations that
+  disagree with its own records. It fires only where an `aval.pack` exists, so
+  no corpus that was clean starts failing.
+- A pack never re-exports what it vendored. Otherwise one consumer's copy of a
+  decision reaches another by a route neither chose.
+- `resolve` says which pack an answer came from, in text and in `--json`. A
+  consumer has to be able to tell a decision it can change from one it cannot.
+- **Fixed: a quoted value containing ` # ` was silently truncated.** The YAML
+  comment stripper did not respect quotes, so `choice: "Kong # the gateway"`
+  parsed as `Kong` — no check fired, and the projection stated a decision
+  nobody wrote. Quoting is the documented way to protect a value, so it now
+  actually protects it. Reachable in frontmatter all along; the pack format,
+  which quotes every value, is what made it certain.
+
 ## v0.4.1
 
 One paragraph added to the session hook's preamble, and it is there because of

@@ -7,11 +7,14 @@
 //! happened to match the binary's rather than semantics the binary has. A
 //! second source of records would have separated them silently.
 
+pub mod add;
+pub mod fetch;
 pub mod heads;
 pub mod hook;
 pub mod links;
 pub mod load;
 pub mod migrate;
+pub mod packfile;
 pub mod provenance;
 pub mod render;
 pub mod status;

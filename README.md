@@ -107,6 +107,37 @@ different edges:
 | `aval show ADR-0015` | derived status, including partial supersession |
 | `aval history <key>` | the chain, labelled as history |
 | `aval hook install [--check]` | put the heads in front of an agent at session start |
+| `aval pack [--write\|--check]` | publish this corpus's declarations for others to read |
+| `aval add <source>… [--dry-run]` | vendor another repository's declarations |
+| `aval add --check` | are the vendored packs still what their revisions name |
+
+## Sharing one decision across repositories
+
+A decision made once should be readable everywhere it applies. `aval pack`
+publishes a corpus's declarations; `aval add` vendors them into another
+repository, which then resolves them as if they were its own.
+
+```console
+$ aval add github:acme/decisions
+$ aval resolve stack.sql-layer --scope effect-stack
+active   decisions:ADR-0002   @effect/sql
+  vendored: from the `decisions` pack; change it there, not here
+```
+
+A consumer needs no corpus of its own — a registry with `packs:` and no `dir:`
+is enough. Transport is git and only git, so a private repository and a forge
+behind a client certificate both work with your own credentials and no token
+issued to this tool.
+
+What a consumer cannot do is quietly disagree. A local record deciding a slot a
+pack already decides is two heads for one slot, which is exit 5 — the invariant
+the model already had, and the reason vendoring is worth anything. What it
+*can* do is answer the same key at a scope of its own: one repository may hold
+a SQL layer in the browser and another in the app server without either being
+a disagreement with the fleet's answer at the fleet's scope.
+
+Nothing in a pack is ever executed, so there is no trust prompt to match
+`amont trust`. The review gate is the pull request that adds the file.
 
 ## Status
 

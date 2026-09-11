@@ -19,7 +19,7 @@ const ENTRY_FIELDS: &[&str] = &[
     "overrides",
     "reason",
 ];
-const REGISTRY_FIELDS: &[&str] = &["dir", "sources", "scopes", "keys"];
+const REGISTRY_FIELDS: &[&str] = &["dir", "sources", "packs", "scopes", "keys"];
 const KEYDEF_FIELDS: &[&str] = &["description", "scopes"];
 
 fn a(check: &'static str, msg: impl Into<String>) -> Finding {
@@ -319,6 +319,7 @@ pub fn adr(file: &str, src: &str, origin: Origin) -> Result<Adr, Vec<Finding>> {
             status,
             decisions,
             file: file.to_string(),
+            pack: None,
         })
     } else {
         Err(out)
@@ -487,6 +488,47 @@ fn key_scope_check(
     }
 }
 
+/// A registry field holding literal repository-relative paths.
+///
+/// Shared by `sources` and `packs` because the rule is the same one and for
+/// the same reason: a pattern that matches nothing drops something silently,
+/// and silence is what this tool exists to remove. A path that escapes the
+/// repository is refused rather than resolved, textually, because
+/// `canonicalize` follows symlinks and would decide the question elsewhere.
+fn path_list(doc: &Node, key: &str, file: &str, out: &mut Vec<Finding>) -> Vec<String> {
+    let list = want_str_list(doc, key, file, out);
+    let line = doc.get(key).map_or(1, |n| n.line);
+    for p in &list {
+        if p.starts_with('/') || p.split('/').any(|seg| seg == "..") {
+            out.push(
+                a(
+                    "frontmatter-parses",
+                    format!(
+                        "`{}` entry `{}` must be a relative path inside the repository",
+                        key, p
+                    ),
+                )
+                .at(file, line),
+            );
+        }
+        if p.contains('*') || p.contains('?') {
+            out.push(
+                a(
+                    "frontmatter-parses",
+                    format!(
+                        "`{}` entry `{}` looks like a pattern; list each file, \
+                         so a file that stops matching is an error rather than a \
+                         record that quietly disappears",
+                        key, p
+                    ),
+                )
+                .at(file, line),
+            );
+        }
+    }
+    list
+}
+
 /// Parse a `.adr.yaml` registry.
 pub fn registry(file: &str, src: &str) -> Result<Registry, Vec<Finding>> {
     let mut out = Vec::new();
@@ -503,46 +545,30 @@ pub fn registry(file: &str, src: &str) -> Result<Registry, Vec<Finding>> {
     }
     unknown_fields(&doc, REGISTRY_FIELDS, "registry", file, &mut out);
 
-    let dir = want_str(&doc, "dir", file, &mut out).unwrap_or_else(|| {
-        if doc.get("dir").is_none() {
-            out.push(a("frontmatter-parses", "missing `dir`").in_file(file));
-        }
-        String::new()
-    });
-
     // Literal repository-relative paths, deliberately not patterns. A pattern
     // that matches nothing drops a record silently, and a pattern slightly too
     // wide captures unrelated frontmatter; a listed file that is missing is an
     // error, which is the property worth having.
-    let sources = want_str_list(&doc, "sources", file, &mut out);
-    for src in &sources {
-        if src.starts_with('/') || src.split('/').any(|seg| seg == "..") {
+    let sources = path_list(&doc, "sources", file, &mut out);
+    let packs = path_list(&doc, "packs", file, &mut out);
+
+    // `dir` is where this repository keeps its own records. A registry that
+    // only vendors has none, and requiring it would make the cheapest way to
+    // adopt the fleet corpus — read it, keep nothing — the one shape the tool
+    // refuses.
+    let dir = want_str(&doc, "dir", file, &mut out).unwrap_or_else(|| {
+        if doc.get("dir").is_none() && packs.is_empty() {
             out.push(
                 a(
                     "frontmatter-parses",
-                    format!(
-                        "`sources` entry `{}` must be a relative path inside the repository",
-                        src
-                    ),
+                    "missing `dir`; a registry needs somewhere to keep records, \
+                     or a `packs` list to read somebody else's",
                 )
-                .at(file, doc.get("sources").map_or(1, |n| n.line)),
+                .in_file(file),
             );
         }
-        if src.contains('*') || src.contains('?') {
-            out.push(
-                a(
-                    "frontmatter-parses",
-                    format!(
-                        "`sources` entry `{}` looks like a pattern; list each file, \
-                         so a file that stops matching is an error rather than a \
-                         record that quietly disappears",
-                        src
-                    ),
-                )
-                .at(file, doc.get("sources").map_or(1, |n| n.line)),
-            );
-        }
-    }
+        String::new()
+    });
 
     let scopes = want_str_list(&doc, "scopes", file, &mut out);
     for s in &scopes {
@@ -599,6 +625,7 @@ pub fn registry(file: &str, src: &str) -> Result<Registry, Vec<Finding>> {
         Ok(Registry {
             dir,
             sources,
+            packs,
             scopes,
             keys,
         })

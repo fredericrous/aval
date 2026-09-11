@@ -95,10 +95,27 @@ pub struct Adr {
     /// Repository-relative path, for messages and for `id-matches-filename`.
     /// A path rather than a basename because two sources may hold the same
     /// filename, and a finding naming only the basename could not say which.
+    ///
+    /// For a record that came from a pack this is the vendored pack file, which
+    /// is the file in *this* repository a reader should open. The record's own
+    /// document lives in another repository and is not here to point at.
     pub file: String,
+    /// The pack this record was vendored from, or `None` for a local record.
+    ///
+    /// Layer C never reads it — those checks iterate the files actually read
+    /// off disk, and a pack is not among them — but resolution output says
+    /// where an answer came from, and a consumer must be able to tell a fleet
+    /// decision from one of its own without opening a file.
+    pub pack: Option<String>,
 }
 
 impl Adr {
+    /// Whether this record is vendored, and therefore not the consumer's to
+    /// edit. Findings about it say "re-add the pack", never "fix line N".
+    pub fn is_vendored(&self) -> bool {
+        self.pack.is_some()
+    }
+
     pub fn entry_at(&self, slot: Slot<'_>) -> Option<&Entry> {
         self.decisions
             .iter()
@@ -133,17 +150,29 @@ impl KeyDef {
 #[derive(Debug, Clone)]
 pub struct Registry {
     /// Where numbered ADR files live, relative to the registry. Also where
-    /// `HEADS.md` is written.
+    /// `HEADS.md` is written. Empty when the corpus has no records of its own,
+    /// which is legal only alongside `packs`.
     pub dir: String,
     /// Additional records, as literal repository-relative paths. A document
     /// listed here is a record wherever it lives and whatever it is named, so
     /// a specification can carry decisions without being moved or renumbered.
     pub sources: Vec<String>,
+    /// Vendored packs, as literal repository-relative paths. Each file was
+    /// written by `aval add` and carries another repository's declarations.
+    pub packs: Vec<String>,
     pub scopes: Vec<String>,
     pub keys: Vec<KeyDef>,
 }
 
 impl Registry {
+    /// Whether this corpus keeps records of its own. A registry that only
+    /// vendors has nowhere to put `HEADS.md` and nothing to scan for numbered
+    /// files, and both callers must ask rather than joining an empty string
+    /// onto the root and walking the whole repository.
+    pub fn has_dir(&self) -> bool {
+        !self.dir.is_empty()
+    }
+
     pub fn has_key(&self, k: &str) -> bool {
         self.keys.iter().any(|d| d.name == k)
     }
