@@ -760,10 +760,13 @@ fn cmd_add(args: &Args) -> i32 {
     }
 
     for (v, p) in vendored.iter().zip(&plans) {
-        let state = match p {
-            add::Plan::New => "new",
-            add::Plan::Unchanged => "unchanged",
-            add::Plan::Update(old) => &format!("was {}", aval::fetch::short(old)),
+        // An owned String rather than a borrow of one arm's temporary: the
+        // MSRV does not extend a temporary's lifetime out of a match arm, and
+        // the newer compiler that does would have let this reach a release.
+        let state: String = match p {
+            add::Plan::New => "new".into(),
+            add::Plan::Unchanged => "unchanged".into(),
+            add::Plan::Update(old) => format!("was {}", aval::fetch::short(old)),
             add::Plan::Collision(_) => unreachable!("returned above"),
         };
         println!(
