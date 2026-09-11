@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+## v0.4.0
+
+**`aval hook install`** — a session-start hook that prints the current decision
+heads, so whatever is about to write code starts from what was decided rather
+than from what it can infer. That is the failure this tool was built for: the
+same design-system rule copied into six files, one of them already wrong.
+
+Modelled on `duro hook install` deliberately, because that pattern is proven
+across several repositories and a second shape would be a second thing to
+learn. Two differences, both because this payload is local rather than fetched:
+there is no cache, no expiry and no staging file, and nothing to add to
+`.gitignore`.
+
+- Writes `.claude/hooks/aval-heads.sh` and merges one entry into
+  `.claude/settings.json`. Unrelated keys and other tools' hooks survive; a
+  settings file that does not parse stops the install with the repository
+  untouched.
+- A variant spelling of the command is rewritten in place rather than joined by
+  a second entry that does the same thing on every session start.
+- **Silent when `aval` is absent**, so committing the hook cannot fail a
+  colleague's session, and silent when there is no corpus to report — saying so
+  is the gate's job.
+- `.claude/aval-hook.local.md` is appended by the hook and never written by
+  install, so repo-specific caveats survive regeneration.
+- `--check` is the drift detector: exit 0 wired, exit 1 stale, and it writes
+  nothing.
+- Warns when git ignores the files it just wrote, which would leave the hook
+  working for whoever ran the command and for nobody else.
+
+The settings merge re-serialises the file, which sorts its top-level keys. That
+is one-time and stable. The alternative was making every `--json` key order
+depend on construction order instead, which is a worse trade for a contract
+that machines read.
+
+`Json::write_pretty` is added beside `write`, which stays compact because it
+serves `--json` where byte-stability is the contract.
+
 ## v0.3.1
 
 Fixes a false positive introduced in 0.3.0, found by running the new binary

@@ -59,6 +59,26 @@ that is where an agent left to its own judgment does damage.
 | 6 | `retired` | an ADR deliberately retired this key |
 | 7 | `unknown` | no such key or scope, or a key not decided on that axis |
 
+## In front of an agent
+
+A corpus that resolves is half the point. The other half is that whatever is
+about to write code starts from what was decided:
+
+```console
+$ aval hook install
+  wrote  .claude/hooks/aval-heads.sh  (created)
+  wrote  .claude/settings.json  (merged)
+```
+
+It writes a session-start hook that prints the current heads, and merges one
+entry into `.claude/settings.json` without disturbing what else is there. The
+hook is **silent** when `aval` is not installed, so committing it cannot fail a
+colleague's session, and silent when there is no corpus to report.
+
+Repo-specific caveats go in `.claude/aval-hook.local.md`. The hook appends that
+file; installing again never touches it. `--check` is the drift detector for
+CI: exit 0 wired, exit 1 stale.
+
 Codes `1`, `2` and `3` mean the tool failed, was misused, or could not read the
 corpus. They never overlap a verdict, so "I could not look" is never mistaken
 for "I looked and found nothing".
@@ -86,6 +106,7 @@ different edges:
 | `aval heads [--write\|--check]` | the projection |
 | `aval show ADR-0015` | derived status, including partial supersession |
 | `aval history <key>` | the chain, labelled as history |
+| `aval hook install [--check]` | put the heads in front of an agent at session start |
 
 ## Status
 

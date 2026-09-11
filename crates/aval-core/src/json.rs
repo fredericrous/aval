@@ -110,6 +110,48 @@ impl Json {
     }
 }
 
+/// Indented output, for a file a person reads and edits.
+///
+/// `write` stays compact: it serves `--json`, where the reader is a program and
+/// byte-stability is the contract. This one serves `.claude/settings.json`,
+/// where the reader is a person and a single long line is hostile.
+impl Json {
+    pub fn write_pretty(&self, out: &mut String, depth: usize) {
+        let pad = |n: usize| "  ".repeat(n);
+        match self {
+            Json::Arr(items) if !items.is_empty() => {
+                out.push_str("[\n");
+                for (i, v) in items.iter().enumerate() {
+                    out.push_str(&pad(depth + 1));
+                    v.write_pretty(out, depth + 1);
+                    if i + 1 < items.len() {
+                        out.push(',');
+                    }
+                    out.push('\n');
+                }
+                out.push_str(&pad(depth));
+                out.push(']');
+            }
+            Json::Obj(map) if !map.is_empty() => {
+                out.push_str("{\n");
+                for (i, (k, v)) in map.iter().enumerate() {
+                    out.push_str(&pad(depth + 1));
+                    Json::Str(k.clone()).write(out);
+                    out.push_str(": ");
+                    v.write_pretty(out, depth + 1);
+                    if i + 1 < map.len() {
+                        out.push(',');
+                    }
+                    out.push('\n');
+                }
+                out.push_str(&pad(depth));
+                out.push('}');
+            }
+            other => other.write(out),
+        }
+    }
+}
+
 impl fmt::Display for Json {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut s = String::new();
