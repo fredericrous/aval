@@ -5,11 +5,7 @@
 //! section 14. The rule that shapes all of them is that a code meaning "I could
 //! not reach a verdict" never shares a range with a verdict.
 
-mod links;
-mod load;
-mod migrate;
-mod provenance;
-mod render;
+use aval::{links, load, migrate, provenance, render};
 
 use aval_core::graph::Verdict;
 use aval_core::json::Json;
