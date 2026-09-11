@@ -61,6 +61,31 @@ fn want_str(node: &Node, key: &str, file: &str, out: &mut Vec<Finding>) -> Optio
     }
 }
 
+/// `want_str`, and the value must be one line.
+///
+/// A markdown table row has no escape for a newline, so a multi-line `choice`
+/// would split one record across several rows and corrupt the projection. The
+/// YAML dialect accepts block scalars, so this is reachable by writing exactly
+/// what the dialect allows. Rejecting at parse time is cheaper than encoding,
+/// and a choice that needs a second line is not a choice.
+fn want_line(node: &Node, key: &str, file: &str, out: &mut Vec<Finding>) -> Option<String> {
+    let v = want_str(node, key, file, out)?;
+    if v.contains('\n') {
+        out.push(
+            a(
+                "frontmatter-parses",
+                format!("`{}` must be a single line; it carries a newline", key),
+            )
+            .at(file, node.get(key).map_or(node.line, |n| n.line)),
+        );
+        // The value is still returned. The finding above already fails the
+        // parse; returning None here would additionally make the entry look
+        // as though it declared neither `choice` nor `retire`, and report a
+        // second error about a field the author did write.
+    }
+    Some(v)
+}
+
 fn want_flag(node: &Node, key: &str, file: &str, out: &mut Vec<Finding>) -> bool {
     let Some(v) = node.get(key) else { return false };
     match v.as_bool() {
@@ -280,12 +305,12 @@ fn parse_entry(node: &Node, file: &str, out: &mut Vec<Finding>) -> Option<Entry>
         out.push(a("frontmatter-parses", "a decision is missing `key`").at(file, node.line));
     }
     let scope = want_str(node, "scope", file, out).unwrap_or_else(|| DEFAULT_SCOPE.to_string());
-    let choice = want_str(node, "choice", file, out);
+    let choice = want_line(node, "choice", file, out);
     let retire = want_flag(node, "retire", file, out);
     let first = want_flag(node, "first", file, out);
     let replaces = want_str_list(node, "replaces", file, out);
     let overrides = want_str(node, "overrides", file, out);
-    let reason = want_str(node, "reason", file, out);
+    let reason = want_line(node, "reason", file, out);
 
     // Exactly one of choice / retire: SEMANTICS section 1.4.
     let kind = match (choice, retire) {
@@ -612,6 +637,26 @@ mod tests {
         let r = registry(".adr.yaml", "dir: d\nscopes: []\nkeys:\n  a.b:\n").expect("parses");
         assert_eq!(r.keys.len(), 1);
         assert!(r.keys[0].description.is_none());
+    }
+
+    #[test]
+    fn a_multi_line_choice_is_rejected_with_its_line() {
+        // Reachable by writing exactly what the YAML dialect allows: a block
+        // scalar. A markdown table row has no escape for a newline, so this
+        // would split one record across several rows in the projection.
+        let e = adr(
+            "0001-a.md",
+            "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  - key: a.b\n    first: true\n    choice: |\n      one\n      two\n---\n# x\n",
+        )
+        .unwrap_err();
+        assert!(e[0].message.contains("single line"), "{:?}", e);
+        assert_eq!(e[0].line, Some(6), "{:?}", e);
+        assert_eq!(
+            e.len(),
+            1,
+            "a second finding would blame a field the author did write: {:?}",
+            e
+        );
     }
 
     #[test]

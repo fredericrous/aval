@@ -240,3 +240,55 @@ fn every_corpus_heads_file_matches_the_projection() {
         );
     }
 }
+
+/// The defect this release exists to fix, asserted against a fixture that is
+/// the literal output of `npx prettier`, not an imitation of it.
+///
+/// Eighteen repositories in the fleet this tool serves run prettier over their
+/// markdown. A generated file that cannot survive the repository's own
+/// formatter is a defect in the generator, and the workaround — excluding it
+/// from formatting — does not scale to eighteen.
+#[test]
+fn a_prettier_formatted_projection_is_current() {
+    let l = loaded("homelab-sample");
+    let canonical = aval_core::project::render(&l.graph);
+    let formatted = include_str!("fixtures/heads-prettier.md");
+
+    assert_ne!(
+        formatted, canonical,
+        "the fixture must actually be reformatted, or this test asserts nothing"
+    );
+    assert_eq!(
+        aval_core::project::canonicalise(formatted),
+        aval_core::project::canonicalise(&canonical),
+        "prettier's output must read as current"
+    );
+}
+
+/// Paired with the above: tolerating the formatter must not tolerate a claim.
+#[test]
+fn an_edit_to_a_formatted_projection_is_still_stale() {
+    let l = loaded("homelab-sample");
+    let canonical = aval_core::project::canonicalise(&aval_core::project::render(&l.graph));
+    let formatted = include_str!("fixtures/heads-prettier.md");
+
+    for edit in [
+        // a head that moved
+        formatted.replace("ADR-0006", "ADR-0099"),
+        // a row nobody decided
+        formatted.replace(
+            "## Undecided",
+            "| made.up | — | ADR-0001 | X |\n\n## Undecided",
+        ),
+        // prose under the banner: the case a row-parser would have ignored
+        format!("{}\nNote: under review.\n", formatted),
+        // the banner itself rewritten
+        formatted.replace("Do not edit.", "Maintained by hand."),
+    ] {
+        assert_ne!(
+            aval_core::project::canonicalise(&edit),
+            canonical,
+            "a content change must not read as current"
+        );
+    }
+}

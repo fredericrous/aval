@@ -5,7 +5,7 @@
 //! section 14. The rule that shapes all of them is that a code meaning "I could
 //! not reach a verdict" never shares a range with a verdict.
 
-use aval::{links, load, migrate, provenance, render};
+use aval::{heads, links, load, migrate, provenance, render};
 
 use aval_core::graph::Verdict;
 use aval_core::json::Json;
@@ -264,7 +264,7 @@ fn cmd_check(args: &Args) -> i32 {
     // failed with exit 3.
     let mut findings = l.graph.single_head_findings();
     findings.extend(links::check(&l));
-    findings.extend(heads_freshness(&l));
+    findings.extend(heads::findings(&l));
     findings.extend(manual_index(&l));
     findings.sort_by_key(|a| (a.layer, a.file.clone(), a.line));
 
@@ -298,26 +298,6 @@ fn cmd_check(args: &Args) -> i32 {
         0
     } else {
         E_FAIL
-    }
-}
-
-fn heads_freshness(l: &Loaded) -> Vec<Finding> {
-    let want = project::render(&l.graph);
-    let path = l.adr_dir.join(load::HEADS);
-    match std::fs::read_to_string(&path) {
-        Ok(have) if have == want => Vec::new(),
-        Ok(_) => vec![Finding::new(
-            Layer::C,
-            "heads-fresh",
-            "HEADS.md does not match the projection; run `aval heads --write`",
-        )
-        .in_file(format!("{}/{}", l.graph.registry().dir, load::HEADS))],
-        Err(_) => vec![Finding::new(
-            Layer::C,
-            "heads-fresh",
-            "HEADS.md is missing; run `aval heads --write`",
-        )
-        .in_file(format!("{}/{}", l.graph.registry().dir, load::HEADS))],
     }
 }
 
@@ -363,8 +343,17 @@ fn cmd_heads(args: &Args) -> i32 {
     let text = project::render(&l.graph);
     let path = l.adr_dir.join(load::HEADS);
     if args.write {
-        match std::fs::write(&path, &text) {
-            Ok(()) => {
+        // Content-idempotent: a file that already states the projection keeps
+        // its bytes, so a formatter's padding is not undone on every run and
+        // then reapplied on every commit.
+        match heads::write(&l) {
+            Ok(heads::Wrote::Unchanged) => {
+                if !args.json {
+                    println!("aval: {} already current", path.display());
+                }
+                0
+            }
+            Ok(heads::Wrote::Written) => {
                 if !args.json {
                     println!("aval: wrote {}", path.display());
                 }
@@ -381,7 +370,7 @@ fn cmd_heads(args: &Args) -> i32 {
             }
         }
     } else if args.check {
-        let f = heads_freshness(&l);
+        let f = heads::findings(&l);
         if f.is_empty() {
             if !args.json {
                 println!("aval: HEADS.md is current");

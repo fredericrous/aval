@@ -7,6 +7,7 @@
 //! happened to match the binary's rather than semantics the binary has. A
 //! second source of records would have separated them silently.
 
+pub mod heads;
 pub mod links;
 pub mod load;
 pub mod migrate;
