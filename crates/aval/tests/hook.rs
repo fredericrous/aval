@@ -211,6 +211,13 @@ fn the_hook_prints_the_heads_and_the_preamble() {
     assert!(got.out.contains("ARCHITECTURE DECISIONS"), "{}", got.out);
     assert!(got.out.contains("| a.b |"), "{}", got.out);
     assert!(got.out.contains("aval resolve"), "{}", got.out);
+    // The paragraph that exists because of a real mistake: two live
+    // implementations read as two decisions when one had replaced the other.
+    assert!(
+        got.out.contains("What is deployed is not what was decided"),
+        "{}",
+        got.out
+    );
 }
 
 /// The property that makes this safe to commit: a session must not fail, or
