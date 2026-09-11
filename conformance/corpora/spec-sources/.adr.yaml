@@ -1,0 +1,17 @@
+# Both document shapes in one corpus: numbered records under `dir`, and
+# specifications named outright. A repository should not have to pick.
+dir: docs/adr
+sources:
+  - docs/spec-change-proposals.md
+  - docs/plan-ia-coherence.md
+scopes: [org, storm-board]
+keys:
+  dsl.serialization:
+    description: How the canonical text is split across files
+  model.change-proposal-shape:
+    description: What a proposed change actually is
+  ia.navigation-policy:
+    description: How destinations are grouped
+  ia.mobile-write-policy:
+    description: Whether a view is editable on touch
+    scopes: [storm-board]

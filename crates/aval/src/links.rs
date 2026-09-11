@@ -13,7 +13,7 @@
 use crate::load::Loaded;
 use aval_core::model::{Finding, Layer};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// A citation found in a document body.
@@ -323,6 +323,51 @@ fn gitlinks(root: &Path) -> Vec<String> {
         .collect()
 }
 
+/// The directory a document's relative links resolve against.
+///
+/// Per document, not per corpus. Records may live in more than one directory
+/// now, and resolving every citation against the ADR directory would read
+/// `[x](./diagram.svg)` in `docs/architecture/foo.md` as pointing inside
+/// `docs/adr/` — dangling when it is fine, and resolving when it is not.
+fn document_dir(l: &Loaded, rel: &str) -> PathBuf {
+    match Path::new(rel).parent() {
+        Some(p) if !p.as_os_str().is_empty() => l.root.join(p),
+        _ => l.root.clone(),
+    }
+}
+
+/// A citation target as a repository-relative path, resolved lexically.
+///
+/// Lexical because the target may not exist — that is usually the whole
+/// question — so `canonicalize` is unavailable, and it resolves symlinks
+/// anyway. Used for the gitignore and gitlink comparisons, which are string
+/// prefix tests against repository-relative paths and were previously fed a
+/// target with its leading `../` merely trimmed off.
+fn repo_relative(l: &Loaded, base: &Path, target: &str) -> String {
+    let start = if target.starts_with('/') {
+        Vec::new()
+    } else {
+        base.strip_prefix(&l.root)
+            .map(|r| {
+                r.components()
+                    .map(|c| c.as_os_str().to_string_lossy().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut parts: Vec<String> = start;
+    for seg in target.trim_start_matches('/').split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other.to_string()),
+        }
+    }
+    parts.join("/")
+}
+
 pub fn check(l: &Loaded) -> Vec<Finding> {
     let mut out = Vec::new();
     let roots = top_level(&l.root);
@@ -343,6 +388,7 @@ pub fn check(l: &Loaded) -> Vec<Finding> {
         if is_draft {
             continue;
         }
+        let doc_dir = document_dir(l, name);
         for c in collect(src) {
             let t = &c.target;
             if is_url(t) || t.starts_with('#') || is_glob(t) || is_pinned(t) {
@@ -362,10 +408,10 @@ pub fn check(l: &Loaded) -> Vec<Finding> {
                     continue;
                 }
             }
-            if escapes_repo(l, &l.adr_dir, &c) || resolves(l, &l.adr_dir, &c) {
+            if escapes_repo(l, &doc_dir, &c) || resolves(l, &doc_dir, &c) {
                 continue;
             }
-            let normalised = t.trim_start_matches("../").trim_start_matches("./");
+            let normalised = repo_relative(l, &doc_dir, without_line_suffix(without_fragment(t)));
             if links.iter().any(|g| normalised.starts_with(g.as_str())) {
                 continue;
             }

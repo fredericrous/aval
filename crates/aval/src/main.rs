@@ -238,7 +238,7 @@ fn cmd_resolve(args: &Args) -> i32 {
                 match found {
                     Some((file, line)) => (
                         id.clone(),
-                        provenance::for_line(&l.root, &l.adr_dir.join(file), line),
+                        provenance::for_line(&l.root, &l.root.join(file), line),
                     ),
                     None => (id.clone(), provenance::Provenance::Unavailable),
                 }

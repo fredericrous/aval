@@ -19,7 +19,7 @@ const ENTRY_FIELDS: &[&str] = &[
     "overrides",
     "reason",
 ];
-const REGISTRY_FIELDS: &[&str] = &["dir", "scopes", "keys"];
+const REGISTRY_FIELDS: &[&str] = &["dir", "sources", "scopes", "keys"];
 const KEYDEF_FIELDS: &[&str] = &["description", "scopes"];
 
 fn a(check: &'static str, msg: impl Into<String>) -> Finding {
@@ -133,9 +133,57 @@ fn want_str_list(node: &Node, key: &str, file: &str, out: &mut Vec<Finding>) -> 
     res
 }
 
+/// Where a record was found, which decides how its `id` is judged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// Under the registry's `dir`, identified by a numeric filename prefix.
+    Numbered,
+    /// Named outright in the registry's `sources`.
+    Listed,
+}
+
+/// Why an id is not a usable slug, or `None` if it is.
+fn bad_slug(id: &str) -> Option<String> {
+    // `ADR-0007` from a listed file would name a numbered record that no
+    // numbered file backs, and SEMANTICS section 3.3 describes a reference as
+    // a bare ADR id. A slug must not be able to impersonate one.
+    if id.starts_with("ADR-") {
+        return Some(format!(
+            "`id: {}` is reserved for a numbered record under `dir`; a listed \
+             document needs an id of its own",
+            id
+        ));
+    }
+    if id.len() > 64 {
+        return Some(format!("`id: {}` is longer than 64 characters", id));
+    }
+    let mut chars = id.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() => {}
+        _ => return Some(format!("`id: {}` must start with a letter", id)),
+    }
+    if let Some(c) = chars.find(|c| !(c.is_ascii_alphanumeric() || "._-".contains(*c))) {
+        return Some(format!(
+            "`id: {}` carries `{}`; a slug holds letters, digits, `.`, `_` and `-`",
+            id, c
+        ));
+    }
+    None
+}
+
+/// The final path segment of `file`. Records may live in more than one
+/// directory, so `file` is a repository-relative path and a finding that named
+/// only the basename would be ambiguous between two of them.
+pub fn basename(file: &str) -> &str {
+    file.rsplit('/').next().unwrap_or(file)
+}
+
 /// The numeric prefix of a filename, as an ADR id.
 fn id_from_filename(file: &str) -> Option<String> {
-    let digits: String = file.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = basename(file)
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     if digits.is_empty() {
         None
     } else {
@@ -143,8 +191,13 @@ fn id_from_filename(file: &str) -> Option<String> {
     }
 }
 
-/// Parse one ADR. `file` is a basename; this crate never touches a path.
-pub fn adr(file: &str, src: &str) -> Result<Adr, Vec<Finding>> {
+/// Parse one ADR.
+///
+/// `file` is a repository-relative path and this crate treats it as an opaque
+/// label: it is copied into findings and onto `Adr.file`, and the only code
+/// that looks inside it is `id_from_filename`, which reads the final segment.
+/// Nothing here touches the filesystem.
+pub fn adr(file: &str, src: &str, origin: Origin) -> Result<Adr, Vec<Finding>> {
     let mut out = Vec::new();
     let Some((fm, offset, _body)) = yaml::split_frontmatter(src) else {
         return Err(vec![a(
@@ -181,22 +234,36 @@ pub fn adr(file: &str, src: &str) -> Result<Adr, Vec<Finding>> {
         }
     };
     if !id.is_empty() {
-        match id_from_filename(file) {
-            Some(expected) if expected != id => out.push(
-                a(
-                    "id-matches-filename",
-                    format!("`id: {}` but the filename says {}", id, expected),
-                )
-                .at(file, doc.get("id").map_or(1, |n| n.line)),
-            ),
-            None => out.push(
-                a(
-                    "id-matches-filename",
-                    "the filename has no leading ADR number",
-                )
-                .in_file(file),
-            ),
-            _ => {}
+        let line = doc.get("id").map_or(1, |n| n.line);
+        match origin {
+            // Found under `dir` by its numeric prefix, so the number is the
+            // identity and the two must agree.
+            Origin::Numbered => match id_from_filename(file) {
+                Some(expected) if expected != id => out.push(
+                    a(
+                        "id-matches-filename",
+                        format!("`id: {}` but the filename says {}", id, expected),
+                    )
+                    .at(file, line),
+                ),
+                None => out.push(
+                    a(
+                        "id-matches-filename",
+                        "the filename has no leading ADR number",
+                    )
+                    .in_file(file),
+                ),
+                _ => {}
+            },
+            // Named in `sources`, so the filename says nothing about the id.
+            // Keyed on how the file was found rather than on whether it starts
+            // with digits, or an ordinary `2024-payments.md` would be required
+            // to call itself ADR-2024.
+            Origin::Listed => {
+                if let Some(m) = bad_slug(&id) {
+                    out.push(a("id-matches-filename", m).at(file, line));
+                }
+            }
         }
     }
 
@@ -443,6 +510,40 @@ pub fn registry(file: &str, src: &str) -> Result<Registry, Vec<Finding>> {
         String::new()
     });
 
+    // Literal repository-relative paths, deliberately not patterns. A pattern
+    // that matches nothing drops a record silently, and a pattern slightly too
+    // wide captures unrelated frontmatter; a listed file that is missing is an
+    // error, which is the property worth having.
+    let sources = want_str_list(&doc, "sources", file, &mut out);
+    for src in &sources {
+        if src.starts_with('/') || src.split('/').any(|seg| seg == "..") {
+            out.push(
+                a(
+                    "frontmatter-parses",
+                    format!(
+                        "`sources` entry `{}` must be a relative path inside the repository",
+                        src
+                    ),
+                )
+                .at(file, doc.get("sources").map_or(1, |n| n.line)),
+            );
+        }
+        if src.contains('*') || src.contains('?') {
+            out.push(
+                a(
+                    "frontmatter-parses",
+                    format!(
+                        "`sources` entry `{}` looks like a pattern; list each file, \
+                         so a file that stops matching is an error rather than a \
+                         record that quietly disappears",
+                        src
+                    ),
+                )
+                .at(file, doc.get("sources").map_or(1, |n| n.line)),
+            );
+        }
+    }
+
     let scopes = want_str_list(&doc, "scopes", file, &mut out);
     for s in &scopes {
         if s == DEFAULT_SCOPE {
@@ -495,7 +596,12 @@ pub fn registry(file: &str, src: &str) -> Result<Registry, Vec<Finding>> {
     }
 
     if out.is_empty() {
-        Ok(Registry { dir, scopes, keys })
+        Ok(Registry {
+            dir,
+            sources,
+            scopes,
+            keys,
+        })
     } else {
         Err(out)
     }
@@ -513,7 +619,7 @@ mod tests {
 
     #[test]
     fn a_well_formed_adr_parses() {
-        let d = adr("0001-t.md", OK).expect("parses");
+        let d = adr("0001-t.md", OK, Origin::Numbered).expect("parses");
         assert_eq!(d.id, "ADR-0001");
         assert!(d.status.is_accepted());
         assert_eq!(d.decisions.len(), 1);
@@ -523,7 +629,7 @@ mod tests {
 
     #[test]
     fn a_file_without_frontmatter_is_rejected() {
-        let e = adr("0001-t.md", "# just a heading\n").unwrap_err();
+        let e = adr("0001-t.md", "# just a heading\n", Origin::Numbered).unwrap_err();
         assert_eq!(checks(&e), ["frontmatter-parses"]);
     }
 
@@ -533,35 +639,35 @@ mod tests {
             "    first: true",
             "    replacess: [ADR-0000]\n    first: true",
         );
-        let e = adr("0001-t.md", &src).unwrap_err();
+        let e = adr("0001-t.md", &src, Origin::Numbered).unwrap_err();
         assert!(e[0].message.contains("unknown decision field `replacess`"));
         assert!(e[0].message.contains("did you mean `replaces`"));
     }
 
     #[test]
     fn id_must_match_the_filename() {
-        let e = adr("0007-t.md", OK).unwrap_err();
+        let e = adr("0007-t.md", OK, Origin::Numbered).unwrap_err();
         assert_eq!(checks(&e), ["id-matches-filename"]);
     }
 
     #[test]
     fn superseded_is_not_a_writable_status() {
         let src = OK.replace("status: accepted", "status: superseded");
-        let e = adr("0001-t.md", &src).unwrap_err();
+        let e = adr("0001-t.md", &src, Origin::Numbered).unwrap_err();
         assert!(e[0].message.contains("derived, never written"));
     }
 
     #[test]
     fn an_entry_cannot_both_choose_and_retire() {
         let src = OK.replace("    choice: X", "    choice: X\n    retire: true");
-        let e = adr("0001-t.md", &src).unwrap_err();
+        let e = adr("0001-t.md", &src, Origin::Numbered).unwrap_err();
         assert!(checks(&e).contains(&"entry-kind-exclusive"));
     }
 
     #[test]
     fn an_entry_must_declare_a_predecessor() {
         let src = OK.replace("    first: true", "");
-        let e = adr("0001-t.md", &src).unwrap_err();
+        let e = adr("0001-t.md", &src, Origin::Numbered).unwrap_err();
         assert!(checks(&e).contains(&"predecessor-declared"));
     }
 
@@ -571,7 +677,7 @@ mod tests {
             "    first: true",
             "    first: true\n    replaces: [ADR-0000]",
         );
-        let e = adr("0001-t.md", &src).unwrap_err();
+        let e = adr("0001-t.md", &src, Origin::Numbered).unwrap_err();
         assert!(checks(&e).contains(&"predecessor-declared"));
     }
 
@@ -581,7 +687,7 @@ mod tests {
             "    first: true",
             "    first: true\n    overrides: ADR-0000",
         );
-        let e = adr("0001-t.md", &src).unwrap_err();
+        let e = adr("0001-t.md", &src, Origin::Numbered).unwrap_err();
         assert!(checks(&e).contains(&"overrides-well-placed"));
     }
 
@@ -591,7 +697,7 @@ mod tests {
             "    first: true",
             "    first: true\n  - key: a.b\n    choice: Y\n    first: true",
         );
-        let e = adr("0001-t.md", &src).unwrap_err();
+        let e = adr("0001-t.md", &src, Origin::Numbered).unwrap_err();
         assert!(checks(&e).contains(&"one-entry-per-slot-per-adr"));
     }
 
@@ -601,14 +707,14 @@ mod tests {
             "    first: true",
             "    first: true\n  - key: a.b\n    scope: cloud\n    choice: Y\n    first: true",
         );
-        let d = adr("0001-t.md", &src).expect("parses");
+        let d = adr("0001-t.md", &src, Origin::Numbered).expect("parses");
         assert_eq!(d.decisions.len(), 2);
     }
 
     #[test]
     fn decisions_must_be_a_list_and_the_message_says_why() {
         let src = "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  a.b:\n    choice: X\n---\n";
-        let e = adr("0001-t.md", src).unwrap_err();
+        let e = adr("0001-t.md", src, Origin::Numbered).unwrap_err();
         assert!(e[0].message.contains("one key at two scopes"));
     }
 
@@ -647,6 +753,7 @@ mod tests {
         let e = adr(
             "0001-a.md",
             "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  - key: a.b\n    first: true\n    choice: |\n      one\n      two\n---\n# x\n",
+            Origin::Numbered,
         )
         .unwrap_err();
         assert!(e[0].message.contains("single line"), "{:?}", e);
