@@ -8,6 +8,10 @@ authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[lib]
+name = "aval"
+path = "src/lib.rs"
+
 [[bin]]
 name = "aval"
 path = "src/main.rs"

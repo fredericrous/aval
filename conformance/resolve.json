@@ -15,7 +15,7 @@
     "asserted here: they are fixed in Phase 2 alongside the renderer, and inventing",
     "them before the renderer exists would pin wording nothing has reviewed."
   ],
-  "min_cases": 29,
+  "min_cases": 33,
   "cases": [
     {
       "name": "global_key_resolves_at_default_scope",
@@ -214,6 +214,34 @@
       "query": { "command": "resolve", "key": "release.trigger", "scope": "duro-stack" },
       "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0003", "matched_scope": "*" },
       "why": "A key with no scopes list keeps pre-field behaviour exactly."
+    },
+    {
+      "name": "a_specification_carries_its_own_decision",
+      "corpus": "spec-sources",
+      "query": { "command": "resolve", "key": "model.change-proposal-shape" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "spec-change-proposals", "matched_scope": "*" },
+      "why": "Named in `sources`, keeping its own filename, so the code that cites it by path still resolves."
+    },
+    {
+      "name": "a_numbered_record_and_a_specification_share_one_graph",
+      "corpus": "spec-sources",
+      "query": { "command": "resolve", "key": "dsl.serialization" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0001", "matched_scope": "*" },
+      "why": "The `dir` rule and the `sources` rule resolve into the same corpus; a repository need not pick one shape."
+    },
+    {
+      "name": "a_listed_record_can_override_its_own_default",
+      "corpus": "spec-sources",
+      "query": { "command": "resolve", "key": "ia.mobile-write-policy", "scope": "storm-board" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "plan-ia-coherence", "matched_scope": "storm-board" },
+      "why": "One document holds both entries, which the model allows because an ADR holds at most one entry per slot."
+    },
+    {
+      "name": "the_overridden_default_still_stands",
+      "corpus": "spec-sources",
+      "query": { "command": "resolve", "key": "ia.mobile-write-policy" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "plan-ia-coherence", "matched_scope": "*" },
+      "why": "`overrides` records a divergence without moving the default's head. Note the key declares only `storm-board`, so asking it at a tenancy scope is exit 7 rather than this answer."
     }
   ]
 }

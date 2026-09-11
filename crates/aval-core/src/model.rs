@@ -92,7 +92,9 @@ pub struct Adr {
     pub id: String,
     pub status: Status,
     pub decisions: Vec<Entry>,
-    /// Basename, for messages and for `id-matches-filename`.
+    /// Repository-relative path, for messages and for `id-matches-filename`.
+    /// A path rather than a basename because two sources may hold the same
+    /// filename, and a finding naming only the basename could not say which.
     pub file: String,
 }
 
@@ -130,8 +132,13 @@ impl KeyDef {
 
 #[derive(Debug, Clone)]
 pub struct Registry {
-    /// Where ADR files live, relative to the registry.
+    /// Where numbered ADR files live, relative to the registry. Also where
+    /// `HEADS.md` is written.
     pub dir: String,
+    /// Additional records, as literal repository-relative paths. A document
+    /// listed here is a record wherever it lives and whatever it is named, so
+    /// a specification can carry decisions without being moved or renumbered.
+    pub sources: Vec<String>,
     pub scopes: Vec<String>,
     pub keys: Vec<KeyDef>,
 }

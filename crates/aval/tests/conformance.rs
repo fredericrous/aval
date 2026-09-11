@@ -6,10 +6,10 @@
 //! an empty or mis-parsed fixture from passing green. That last one is the
 //! cheapest insurance in the pattern and the reason it is written down.
 
+use aval::load::{LoadError, Loaded};
 use aval_core::graph::{Graph, Verdict};
 use aval_core::json::{self, Json};
-use aval_core::model::{Corpus, DEFAULT_SCOPE};
-use aval_core::parse;
+use aval_core::model::DEFAULT_SCOPE;
 use std::path::{Path, PathBuf};
 
 fn conformance_dir() -> PathBuf {
@@ -25,39 +25,21 @@ fn battery() -> Json {
     json::parse(&src).expect("resolve.json parses")
 }
 
-/// Load a corpus the way the binary does, but without the binary.
-fn load(name: &str) -> Graph {
+/// Load a corpus with the binary's own loader. This used to be a second
+/// implementation of discovery, which meant the battery asserted semantics
+/// that merely resembled the binary's.
+fn loaded(name: &str) -> Loaded {
     let base = conformance_dir().join("corpora").join(name);
-    let reg_src = std::fs::read_to_string(base.join(".adr.yaml"))
-        .unwrap_or_else(|e| panic!("{}: {}", name, e));
-    let registry = parse::registry(".adr.yaml", &reg_src)
-        .unwrap_or_else(|f| panic!("{}: registry: {:?}", name, f));
-    let dir = base.join(&registry.dir);
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("{}: {}", dir.display(), e))
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().map(|x| x == "md").unwrap_or(false))
-        .collect();
-    paths.sort();
-    let mut adrs = Vec::new();
-    for p in paths {
-        let file = p.file_name().unwrap().to_string_lossy().to_string();
-        if !file
-            .chars()
-            .next()
-            .map(|c| c.is_ascii_digit())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        let src = std::fs::read_to_string(&p).expect("read adr");
-        match parse::adr(&file, &src) {
-            Ok(a) => adrs.push(a),
-            Err(f) => panic!("{}/{}: {:?}", name, file, f),
-        }
+    match aval::load::load(&base) {
+        Ok(l) => l,
+        Err(LoadError::NoRegistry(p)) => panic!("{}: no registry at {}", name, p.display()),
+        Err(LoadError::Unreadable(m)) => panic!("{}: {}", name, m),
+        Err(LoadError::Invalid(f)) => panic!("{}: layer A: {:?}", name, f),
     }
-    Graph::build(Corpus { registry, adrs }).unwrap_or_else(|f| panic!("{}: layer A: {:?}", name, f))
+}
+
+fn load(name: &str) -> Graph {
+    loaded(name).graph
 }
 
 fn want_str<'a>(exp: &'a Json, k: &str) -> Option<&'a str> {
@@ -227,4 +209,86 @@ fn the_projection_omits_a_contradicted_slot() {
     let out = aval_core::project::render(&g);
     assert!(!out.contains("ADR-0002"), "{}", out);
     assert!(!out.contains("ADR-0003"), "{}", out);
+}
+
+/// The five checked-in `HEADS.md` files were decorative until this existed:
+/// nothing compared them to anything, so a change to the projection could not
+/// be told from a regression. SEMANTICS section 15 says a change to the
+/// conformance fixtures is the signal that behaviour moved — this is what
+/// makes that signal fire.
+#[test]
+fn every_corpus_heads_file_matches_the_projection() {
+    let corpora = [
+        "homelab-sample",
+        "diamond",
+        "contradiction",
+        "retire-scoped",
+        "scoped-keys",
+    ];
+    for name in corpora {
+        let l = loaded(name);
+        let path = l.adr_dir.join(aval::load::HEADS);
+        let have = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{}: {}: {}", name, path.display(), e));
+        let want = aval_core::project::render(&l.graph);
+        assert_eq!(
+            have,
+            want,
+            "{}: {} is not what `aval heads --write` produces",
+            name,
+            path.display()
+        );
+    }
+}
+
+/// The defect this release exists to fix, asserted against a fixture that is
+/// the literal output of `npx prettier`, not an imitation of it.
+///
+/// Eighteen repositories in the fleet this tool serves run prettier over their
+/// markdown. A generated file that cannot survive the repository's own
+/// formatter is a defect in the generator, and the workaround — excluding it
+/// from formatting — does not scale to eighteen.
+#[test]
+fn a_prettier_formatted_projection_is_current() {
+    let l = loaded("homelab-sample");
+    let canonical = aval_core::project::render(&l.graph);
+    let formatted = include_str!("fixtures/heads-prettier.md");
+
+    assert_ne!(
+        formatted, canonical,
+        "the fixture must actually be reformatted, or this test asserts nothing"
+    );
+    assert_eq!(
+        aval_core::project::canonicalise(formatted),
+        aval_core::project::canonicalise(&canonical),
+        "prettier's output must read as current"
+    );
+}
+
+/// Paired with the above: tolerating the formatter must not tolerate a claim.
+#[test]
+fn an_edit_to_a_formatted_projection_is_still_stale() {
+    let l = loaded("homelab-sample");
+    let canonical = aval_core::project::canonicalise(&aval_core::project::render(&l.graph));
+    let formatted = include_str!("fixtures/heads-prettier.md");
+
+    for edit in [
+        // a head that moved
+        formatted.replace("ADR-0006", "ADR-0099"),
+        // a row nobody decided
+        formatted.replace(
+            "## Undecided",
+            "| made.up | — | ADR-0001 | X |\n\n## Undecided",
+        ),
+        // prose under the banner: the case a row-parser would have ignored
+        format!("{}\nNote: under review.\n", formatted),
+        // the banner itself rewritten
+        formatted.replace("Do not edit.", "Maintained by hand."),
+    ] {
+        assert_ne!(
+            aval_core::project::canonicalise(&edit),
+            canonical,
+            "a content change must not read as current"
+        );
+    }
 }

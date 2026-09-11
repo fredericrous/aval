@@ -9,7 +9,7 @@
 
 use aval_core::graph::{Graph, Verdict};
 use aval_core::model::{Corpus, Finding, Registry, DEFAULT_SCOPE};
-use aval_core::parse;
+use aval_core::parse::{self, Origin};
 
 const REG: &str = "\
 dir: docs/adr
@@ -28,7 +28,10 @@ fn corpus(docs: &[(&str, &str)]) -> Result<Graph, Vec<Finding>> {
     let mut adrs = Vec::new();
     for (name, fm) in docs {
         let src = format!("---\n{}---\n# stub\n", fm);
-        adrs.push(parse::adr(name, &src).unwrap_or_else(|f| panic!("{}: {:?}", name, f)));
+        adrs.push(
+            parse::adr(name, &src, Origin::Numbered)
+                .unwrap_or_else(|f| panic!("{}: {:?}", name, f)),
+        );
     }
     Graph::build(Corpus {
         registry: registry(),
@@ -299,7 +302,10 @@ fn scoped_corpus(docs: &[(&str, &str)]) -> Result<Graph, Vec<Finding>> {
     let mut adrs = Vec::new();
     for (name, fm) in docs {
         let src = format!("---\n{}---\n# stub\n", fm);
-        adrs.push(parse::adr(name, &src).unwrap_or_else(|f| panic!("{}: {:?}", name, f)));
+        adrs.push(
+            parse::adr(name, &src, Origin::Numbered)
+                .unwrap_or_else(|f| panic!("{}: {:?}", name, f)),
+        );
     }
     Graph::build(Corpus {
         registry: parse::registry(".adr.yaml", REG_SCOPED).expect("registry parses"),

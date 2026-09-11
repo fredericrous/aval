@@ -5,11 +5,7 @@
 //! section 14. The rule that shapes all of them is that a code meaning "I could
 //! not reach a verdict" never shares a range with a verdict.
 
-mod links;
-mod load;
-mod migrate;
-mod provenance;
-mod render;
+use aval::{heads, links, load, migrate, provenance, render, status};
 
 use aval_core::graph::Verdict;
 use aval_core::json::Json;
@@ -242,7 +238,7 @@ fn cmd_resolve(args: &Args) -> i32 {
                 match found {
                     Some((file, line)) => (
                         id.clone(),
-                        provenance::for_line(&l.root, &l.adr_dir.join(file), line),
+                        provenance::for_line(&l.root, &l.root.join(file), line),
                     ),
                     None => (id.clone(), provenance::Provenance::Unavailable),
                 }
@@ -268,7 +264,8 @@ fn cmd_check(args: &Args) -> i32 {
     // failed with exit 3.
     let mut findings = l.graph.single_head_findings();
     findings.extend(links::check(&l));
-    findings.extend(heads_freshness(&l));
+    findings.extend(heads::findings(&l));
+    findings.extend(status::check(&l));
     findings.extend(manual_index(&l));
     findings.sort_by_key(|a| (a.layer, a.file.clone(), a.line));
 
@@ -302,26 +299,6 @@ fn cmd_check(args: &Args) -> i32 {
         0
     } else {
         E_FAIL
-    }
-}
-
-fn heads_freshness(l: &Loaded) -> Vec<Finding> {
-    let want = project::render(&l.graph);
-    let path = l.adr_dir.join(load::HEADS);
-    match std::fs::read_to_string(&path) {
-        Ok(have) if have == want => Vec::new(),
-        Ok(_) => vec![Finding::new(
-            Layer::C,
-            "heads-fresh",
-            "HEADS.md does not match the projection; run `aval heads --write`",
-        )
-        .in_file(format!("{}/{}", l.graph.registry().dir, load::HEADS))],
-        Err(_) => vec![Finding::new(
-            Layer::C,
-            "heads-fresh",
-            "HEADS.md is missing; run `aval heads --write`",
-        )
-        .in_file(format!("{}/{}", l.graph.registry().dir, load::HEADS))],
     }
 }
 
@@ -367,11 +344,20 @@ fn cmd_heads(args: &Args) -> i32 {
     let text = project::render(&l.graph);
     let path = l.adr_dir.join(load::HEADS);
     if args.write {
-        match std::fs::write(&path, &text) {
-            Ok(()) => {
-                if !args.json {
-                    println!("aval: wrote {}", path.display());
-                }
+        // Content-idempotent: a file that already states the projection keeps
+        // its bytes, so a formatter's padding is not undone on every run and
+        // then reapplied on every commit.
+        match heads::write(&l) {
+            // Section 12 says `--json` writes the result object to stdout and
+            // nothing else. These three printed nothing at all under `--json`,
+            // and `--check` printed its findings to stderr, so the row-level
+            // detail was unreachable from a machine caller.
+            Ok(heads::Wrote::Unchanged) => {
+                heads_json_or_text(args, "unchanged", &path, &[]);
+                0
+            }
+            Ok(heads::Wrote::Written) => {
+                heads_json_or_text(args, "written", &path, &[]);
                 0
             }
             Err(e) => {
@@ -385,21 +371,45 @@ fn cmd_heads(args: &Args) -> i32 {
             }
         }
     } else if args.check {
-        let f = heads_freshness(&l);
+        let f = heads::findings(&l);
         if f.is_empty() {
-            if !args.json {
-                println!("aval: HEADS.md is current");
-            }
+            heads_json_or_text(args, "current", &path, &[]);
             0
         } else {
-            for x in &f {
-                eprintln!("{}", x);
-            }
+            heads_json_or_text(args, "stale", &path, &f);
             E_FAIL
         }
     } else {
         print!("{}", text);
         0
+    }
+}
+
+/// One place that decides where `heads` output goes, because section 12 says
+/// `--json` writes the result object to stdout and nothing else.
+fn heads_json_or_text(args: &Args, state: &str, path: &std::path::Path, findings: &[Finding]) {
+    if args.json {
+        let j = Json::obj()
+            .set("state", state)
+            .set("file", path.display().to_string())
+            .set(
+                "findings",
+                findings
+                    .iter()
+                    .map(render::finding_json)
+                    .collect::<Vec<_>>(),
+            );
+        println!("{}", j);
+        return;
+    }
+    match state {
+        "current" => println!("aval: HEADS.md is current"),
+        "unchanged" => println!("aval: {} already current", path.display()),
+        "written" => println!("aval: wrote {}", path.display()),
+        _ => {}
+    }
+    for f in findings {
+        eprintln!("{}", f);
     }
 }
 

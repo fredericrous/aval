@@ -113,6 +113,19 @@ Nothing is gated by installing. To gate a repository, one committed line in its
 
     pre-commit    adr   *+.adr.yaml   block   aval check
 
+Records live under `dir`, and a specification that carries decisions can be
+named where it is rather than moved:
+
+```yaml
+dir: docs/adr
+sources:
+  - docs/spec-change-proposals.md
+```
+
+Literal paths, not patterns: a listed file that goes missing is an error, where
+a pattern that stops matching would drop the record and let a superseded
+decision come back as the current one.
+
 The `+` keeps it inert in any repository without a `.adr.yaml`, and a missing
 binary is reported as a gap rather than blocking a commit.
 
