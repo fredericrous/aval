@@ -1,6 +1,6 @@
 # `aval` — normative semantics
 
-Version 0.3.1. This document is the specification. Where an
+Version 0.4.0. This document is the specification. Where an
 implementation and this document disagree, this document is right and the
 implementation is a bug.
 
@@ -763,6 +763,13 @@ Low codes follow the duro CLI. Verdicts start at 4.
 | `aval heads --check` | A + C | `0` fresh · `1` stale · `2` · `3` |
 | `aval show` | A | `0` · `2` · `3` · `7` |
 | `aval history` | A | `0` · `2` · `3` · `7` |
+| `aval hook install` | — | `0` · `1` write failed · `2` · `3` unreadable settings |
+| `aval hook install --check` | — | `0` wired · `1` stale · `2` · `3` |
+
+`hook install` reads no corpus and touches no layer. It wires a session-start
+hook that runs `heads`; whether the corpus resolves is that command's business,
+and the generated script stays **silent** when it does not, because a session
+must not fail over a tool the person who started it has not installed.
 
 `check` deliberately reports `1` for any finding regardless of layer, because
 its caller is a git hook, where amont's contract is that `0` passes and anything

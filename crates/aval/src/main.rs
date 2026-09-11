@@ -5,7 +5,7 @@
 //! section 14. The rule that shapes all of them is that a code meaning "I could
 //! not reach a verdict" never shares a range with a verdict.
 
-use aval::{heads, links, load, migrate, provenance, render, status};
+use aval::{heads, hook, links, load, migrate, provenance, render, status};
 
 use aval_core::graph::Verdict;
 use aval_core::json::Json;
@@ -26,6 +26,7 @@ USAGE
     aval show <ADR-NNNN>                   derived status of one document
     aval history <key> [--scope <scope>]   the chain, which is history not authority
     aval migrate <dir>                     report what converting a legacy corpus needs
+    aval hook install [--check]            put the heads in front of an agent
 
 OPTIONS
     --json        machine output on stdout, warnings suppressed
@@ -175,6 +176,7 @@ fn run(args: Args) -> i32 {
         "show" => cmd_show(&args),
         "history" => cmd_history(&args),
         "migrate" => cmd_migrate(&args),
+        "hook" => cmd_hook(&args),
         other => {
             eprintln!("aval: unknown command `{}`", other);
             eprint!("{}", USAGE);
@@ -411,6 +413,87 @@ fn heads_json_or_text(args: &Args, state: &str, path: &std::path::Path, findings
     for f in findings {
         eprintln!("{}", f);
     }
+}
+
+/// `aval hook install` — the session-start hook.
+///
+/// The install is the whole command: there is no uninstall, because removing
+/// the entry from `.claude/settings.json` and deleting one script is a thing a
+/// person can do correctly without a subcommand that might do it wrongly.
+fn cmd_hook(args: &Args) -> i32 {
+    let what = match one_positional(args, "`install`") {
+        Ok(k) => k,
+        Err(c) => return c,
+    };
+    if what != "install" {
+        eprintln!(
+            "aval: unknown hook command `{}`; the only one is `install`",
+            what
+        );
+        return E_USAGE;
+    }
+    //  already resolved this, defaulting to the working directory. The
+    // hook installs where the person is, not where the registry happens to be:
+    // a repository may hold a corpus in a subdirectory and still want the hook
+    // at its own root.
+    let root = args.dir.clone();
+    let report = match hook::install(&root, args.check) {
+        Ok(r) => r,
+        Err(hook::Error::SettingsUnparseable(e)) => {
+            // Stop rather than replace it. A settings file this cannot read is
+            // one somebody wrote, and overwriting it would lose whatever else
+            // it says.
+            eprintln!(
+                "aval: {} is not valid JSON ({}) — fix or remove it, then run this again",
+                hook::SETTINGS_PATH,
+                e
+            );
+            return E_INVALID;
+        }
+        Err(hook::Error::Io(e)) => {
+            eprintln!("aval: {}", e);
+            return E_FAIL;
+        }
+    };
+
+    for c in &report.changes {
+        let word = match c.status {
+            hook::Status::Written => "wrote",
+            hook::Status::Unchanged => "ok",
+            hook::Status::Stale => "stale",
+        };
+        println!("  {:<6} {}  ({})", word, c.path, c.detail);
+    }
+
+    if args.check {
+        let n = report.stale();
+        if n == 0 {
+            println!("aval hook install --check: up to date");
+            return 0;
+        }
+        println!(
+            "aval hook install --check: {} file(s) out of date; run `aval hook install`",
+            n
+        );
+        return E_FAIL;
+    }
+
+    println!();
+    println!(
+        "Repo-specific caveats go in {} — the hook appends that file after the",
+        hook::NOTES_PATH
+    );
+    println!("heads, and installing again leaves it alone.");
+
+    if !report.ignored.is_empty() {
+        println!();
+        println!("WARNING: git ignores these, so the hook would work here and ship to nobody.");
+        println!("Add a negation for each:");
+        for p in &report.ignored {
+            println!("  !{}", p);
+        }
+    }
+    0
 }
 
 fn cmd_show(args: &Args) -> i32 {
