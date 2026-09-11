@@ -1,0 +1,42 @@
+{
+  "name": "aval-adr",
+  "version": "__VERSION__",
+  "description": "Ask what the current architecture decision is, and get a typed answer",
+  "keywords": [
+    "adr",
+    "architecture",
+    "architecture-decision-record",
+    "decision-record",
+    "governance",
+    "documentation"
+  ],
+  "homepage": "https://github.com/fredericrous/aval#readme",
+  "bugs": "https://github.com/fredericrous/aval/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fredericrous/aval.git"
+  },
+  "license": "MIT",
+  "author": "Frederic Rousseau",
+  "type": "commonjs",
+  "_comment_name": "The package is `aval-adr` and the binary it installs is `aval`. npm's `aval` was taken in 2016 by an unrelated property validator that has not moved since 0.1.3. crates.io and Homebrew both carry the plain name; only npm needs the suffix.",
+  "bin": {
+    "aval": "bin/aval.js"
+  },
+  "files": [
+    "bin/aval.js",
+    "bin/native.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@aval-adr/darwin-arm64": "__VERSION__",
+    "@aval-adr/darwin-x64": "__VERSION__",
+    "@aval-adr/linux-arm64-gnu": "__VERSION__",
+    "@aval-adr/linux-x64-gnu": "__VERSION__",
+    "@aval-adr/linux-x64-musl": "__VERSION__",
+    "@aval-adr/win32-x64": "__VERSION__"
+  }
+}

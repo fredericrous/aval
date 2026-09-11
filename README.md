@@ -97,13 +97,34 @@ start.
 Still to come: converting a real corpus, the git-hook gate, the agent surfaces,
 and a 1.0.
 
+## Install
+
+    curl -fsSL https://raw.githubusercontent.com/fredericrous/aval/main/install/install.sh | sh
+
+Pin a version or move the destination with `AVAL_VERSION` and `AVAL_BIN_DIR`.
+Windows: `irm https://raw.githubusercontent.com/fredericrous/aval/main/install/install.ps1 | iex`.
+
+Also `cargo install aval`, and `npx aval-adr` — the npm package carries the
+suffix because plain `aval` was taken in 2016 by an unrelated property
+validator; the binary it installs is still `aval`.
+
+Nothing is gated by installing. To gate a repository, one committed line in its
+[`amont.conf`](https://github.com/fredericrous/amont):
+
+    pre-commit    adr   *+.adr.yaml   block   aval check
+
+The `+` keeps it inert in any repository without a `.adr.yaml`, and a missing
+binary is reported as a gap rather than blocking a commit.
+
 ## Building
 
     make check      # what CI runs: no-deps, fmt, clippy, tests
     cargo build --release
 
 No external dependencies, by design and enforced in CI. `aval` runs on the
-pre-commit path, so it pulls in nothing.
+pre-commit path, so it pulls in nothing. `make check` uses rustup's shim when
+one is present, because a Homebrew cargo earlier on `PATH` ignores the
+toolchain pin and would lint with a different clippy than CI.
 
 ## License
 
