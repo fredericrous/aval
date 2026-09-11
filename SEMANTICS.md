@@ -1,6 +1,6 @@
 # `aval` — normative semantics
 
-Version 0.1.0-draft. This document is the specification. Where an
+Version 0.3.0. This document is the specification. Where an
 implementation and this document disagree, this document is right and the
 implementation is a bug.
 
@@ -69,7 +69,9 @@ keys:
     description: Cilium datapath routing mode
 ```
 
-- `dir` — where ADR files live, relative to the registry.
+- `dir` — where numbered ADR files live, relative to the registry. Also where
+  `HEADS.md` is written.
+- `sources` — additional records, named outright (§2.2). Optional.
 - `scopes` — the closed scope vocabulary. `*` is always valid and MUST NOT be
   listed.
 - `keys` — the closed key vocabulary. `description` is for humans and for the
@@ -108,6 +110,40 @@ about a different axis, which reads as agreement.
   (`scope-applies`). A **query** at such a scope returns `unknown` (exit 7) and
   MUST NOT fall back; the question names the wrong axis rather than going
   unanswered.
+
+### 2.2 Records outside `dir`
+
+A decision is often stated in a document that is not an ADR file: a
+specification, a plan, a design note. Renaming and renumbering such a document
+to bring it into the corpus breaks every reference to it, so the registry may
+name it where it is.
+
+```yaml
+dir: docs/adr
+sources:
+  - docs/spec-change-proposals.md
+  - docs/plan-ia-coherence.md
+```
+
+- Entries are **literal repository-relative paths**. They MUST NOT be patterns.
+  A pattern that stops matching removes a record silently — its entries leave
+  the graph, whatever it superseded returns as a head, and §5 answers `active`
+  with a decision that was replaced. A pattern slightly too wide has the
+  opposite failure and captures unrelated frontmatter. A listed file that is
+  missing or unreadable is an error instead, and that is the point.
+- `sources` **supplements** `dir`. It never replaces it.
+- A file reachable by both rules is read once. Deduplication happens before
+  parsing, or one file becomes two records and `id-unique` reports it against
+  itself. **The `dir` rule wins**, so mandatory frontmatter is never traded
+  away by also listing a file.
+- An absent `sources`, and `sources: []`, mean the same thing.
+- With `sources` declared, `dir` need not exist on disk. `heads --write` needs
+  it and says so.
+
+Both shapes are first class and the choice is a repository's to make. A record
+that lives in its own file is superseded rather than edited, so its history is
+in the graph; a specification carrying its decisions is rewritten in place, so
+its history is in git. Neither is wrong, and this document does not choose.
 
 ---
 
@@ -149,12 +185,12 @@ while declaring that it knowingly diverges from the global default. §3.4 and
 
 | Field | Where | Required | Meaning |
 |---|---|---|---|
-| `id` | document | yes | `ADR-NNNN`. MUST match the filename's numeric prefix. |
+| `id` | document | yes | `ADR-NNNN` matching the filename's numeric prefix for a record under `dir`; a slug for one named in `sources` (§3.8). |
 | `status` | document | yes | `draft` or `accepted`. See §7. |
 | `decisions` | document | yes | a **list** of entries. May be empty. |
 | `key` | entry | yes | MUST be declared in the registry |
 | `scope` | entry | no | MUST be declared in the registry. Absent means `*`. |
-| `choice` | entry | see §1.4 | short human answer, for `heads` and `resolve` |
+| `choice` | entry | see §1.4 | short human answer, for `heads` and `resolve`. One line: §12.2. |
 | `retire` | entry | see §1.4 | `true` to declare the slot deliberately empty |
 | `first` | entry | see §3.4 | `true` when nothing precedes this in the slot |
 | `replaces` | entry | see §3.4 | list of ADR ids (§3.3) |
@@ -288,6 +324,26 @@ Three rules that differ from YAML proper, each deliberate:
 
 Unknown fields are rejected too (§3.2). A misspelled `replacess:` that parsed
 into nothing would drop a supersession edge.
+
+### 3.8 Identity
+
+How a record was **found** decides how its `id` is judged. Not whether its
+filename starts with digits: an ordinary `docs/specs/2024-payments.md` would
+otherwise be required to call itself `ADR-2024`.
+
+- Found under `dir` — `id` MUST be `ADR-<digits>` matching the filename's
+  numeric prefix.
+- Named in `sources` — `id` is a slug: a letter, then letters, digits, `.`,
+  `_` or `-`, at most 64 characters. It MUST NOT begin `ADR-`, which would
+  name a numbered record that no numbered file backs and make §3.3's reference
+  grammar stop describing reality.
+
+Ids are unique across the corpus however they were formed, and every reference
+resolves by id alone (§3.3). A record's **file** is identified by a
+repository-relative path rather than a basename, because two sources may hold
+the same filename.
+
+---
 
 ## 4. Heads
 
@@ -482,7 +538,7 @@ answering a question.
 |---|---|
 | `frontmatter-parses` | absent or malformed frontmatter, unknown field |
 | `id-unique` | two documents claiming one id |
-| `id-matches-filename` | `id` disagreeing with the filename prefix |
+| `id-matches-filename` | `id` disagreeing with the filename prefix, or an unusable slug (§3.8) |
 | `key-registered` | a key absent from the registry |
 | `scope-declared` | a scope absent from the registry |
 | `scope-applies` | a declared scope outside the key's own `scopes` list (§2.1) |
@@ -505,8 +561,9 @@ answering a question.
 
 | Check | Reports |
 |---|---|
-| `heads-fresh` | `HEADS.md` not byte-identical to the projection |
+| `heads-fresh` | `HEADS.md` not matching the projection after canonicalisation (§12.2) |
 | `links-resolve` | an unpinned citation that does not resolve (§11) |
+| `status-single-source` | a prose status line claiming approval the frontmatter already owns |
 | `no-manual-index` | a hand-maintained ADR index table |
 | `override-undeclared` | a scoped entry diverging from a global head without `overrides` |
 
@@ -599,12 +656,51 @@ after CI moved to `.forgejo/`, is skipped rather than reported.
 - **A verdict carries a machine token and a stable human note.** Note strings
   are part of the contract and are asserted by fixtures, so output cannot drift
   silently. Changing a note string is a breaking change (§13).
-- **`heads` output is sorted and carries no timestamp**, so CI can byte-compare
-  it. It renders only heads, so a superseded entry can never appear in it. On a
-  Layer A failure it renders **nothing** rather than publishing a partial or
-  false current state.
+- **`heads` output is sorted and carries no timestamp**, so it is a pure
+  function of the graph. It renders only heads, so a superseded entry can never
+  appear in it. On a Layer A failure it renders **nothing** rather than
+  publishing a partial or false current state. What CI compares is the file
+  after canonicalisation (§12.2), not its bytes.
 - **`--json` writes the result object to stdout and nothing else.** Warnings go
   to stderr and are suppressed under `--json`.
+
+### 12.2 Freshness is a claim about content
+
+`HEADS.md` lives in repositories that run a markdown formatter. Both the file
+and the projection are **canonicalised** before comparison, so a formatted
+projection is current and a content-changing edit is not. Adjusting padding by
+hand stays valid; that is the whole point.
+
+Canonicalisation normalises exactly these, and nothing else:
+
+| Normalised | |
+|---|---|
+| `CRLF` → `LF` | otherwise a checkout that converts line endings could never converge |
+| a leading byte-order mark | |
+| trailing whitespace on a line | |
+| trailing blank lines at end of file | |
+| padding inside a table cell | |
+| the delimiter row's style, including alignment markers | |
+
+Everything else survives into the comparison. A row added, removed, reordered
+or altered is stale; so is an edited banner, an edited heading, or added prose.
+
+This is a whitelist and MUST NOT be implemented as a parser that compares
+modelled rows. A reader ignores what it does not model, so prose added under
+the banner would compare equal and pass indefinitely.
+
+**Rows compare as an ordered sequence.** The projection is sorted, and nothing
+else would enforce that if a reordering counted as current.
+
+Because the same function is applied to both sides, it never has to decode an
+escape correctly. It follows that `choice` and `reason` MUST be single-line: a
+table row has no escape for a newline, and one would split a record across
+several rows. That is a Layer A error, reported with its line.
+
+`heads --write` leaves a file alone when it already states the projection, so a
+formatter's output is not undone on every run. **Anything not already current
+is overwritten**, including a file that cannot be read as a projection at all,
+so §9's guarantee holds: there is no state `--write` cannot repair.
 
 ### 12.1 Deliberate limits
 
@@ -663,7 +759,7 @@ Low codes follow the duro CLI. Verdicts start at 4.
 |---|---|---|
 | `aval check` | A + B + C | `0` clean · `1` findings · `2` usage · `3` unreadable |
 | `aval resolve` | A then B | the full table above |
-| `aval heads --write` | A | `0` · `2` · `3` |
+| `aval heads --write` | A | `0` · `1` write failed · `2` · `3` |
 | `aval heads --check` | A + C | `0` fresh · `1` stale · `2` · `3` |
 | `aval show` | A | `0` · `2` · `3` · `7` |
 | `aval history` | A | `0` · `2` · `3` · `7` |
@@ -679,7 +775,11 @@ else fails.
 This document is versioned with the tool.
 
 - Changing a verdict for an unchanged corpus, changing the meaning of an exit
-  code, or changing a note string is **major**.
+  code, or changing a note string is **major**. **Adding a check is major too**
+  when it can fire on a corpus that was clean, because `check` has no warning
+  tier (§14) and its caller is a git hook: a new finding is indistinguishable
+  from a break for everyone downstream. Measure a new check against real
+  corpora before adding it.
 - Adding a check, a command, or an optional field is **minor**.
 - Clarifying wording without changing behaviour is **patch**.
 

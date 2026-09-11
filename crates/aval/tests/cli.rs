@@ -299,3 +299,37 @@ fn a_missing_projection_is_reported_then_written() {
     assert_eq!(run(&r, &["heads", "--write"]).code, 0);
     assert!(p.is_file());
 }
+
+/// Section 12: `--json` writes the result object to stdout and nothing else.
+/// All three of these printed nothing at all under `--json`, and `--check`
+/// sent its findings to stderr, so the row-level detail this release adds was
+/// unreachable from a machine caller.
+#[test]
+fn heads_speaks_json_on_stdout() {
+    let r = corpus_with_heads("heads-json");
+    let p = r.join("docs/adr/HEADS.md");
+
+    let got = run(&r, &["heads", "--check", "--json"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(got.out.contains("\"state\":\"current\""), "{}", got.out);
+    assert!(got.err.is_empty(), "stderr must stay empty: {}", got.err);
+
+    let canonical = fs::read_to_string(&p).unwrap();
+    fs::write(&p, canonical.replace("ADR-0001", "ADR-0099")).unwrap();
+
+    let got = run(&r, &["heads", "--check", "--json"]);
+    assert_eq!(got.code, 1, "{}{}", got.out, got.err);
+    assert!(got.out.contains("\"state\":\"stale\""), "{}", got.out);
+    assert!(
+        got.out.contains("ADR-0099"),
+        "the finding must reach stdout: {}",
+        got.out
+    );
+    assert!(got.err.is_empty(), "stderr must stay empty: {}", got.err);
+
+    let got = run(&r, &["heads", "--write", "--json"]);
+    assert_eq!(got.code, 0);
+    assert!(got.out.contains("\"state\":\"written\""), "{}", got.out);
+    let got = run(&r, &["heads", "--write", "--json"]);
+    assert!(got.out.contains("\"state\":\"unchanged\""), "{}", got.out);
+}

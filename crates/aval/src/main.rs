@@ -348,16 +348,16 @@ fn cmd_heads(args: &Args) -> i32 {
         // its bytes, so a formatter's padding is not undone on every run and
         // then reapplied on every commit.
         match heads::write(&l) {
+            // Section 12 says `--json` writes the result object to stdout and
+            // nothing else. These three printed nothing at all under `--json`,
+            // and `--check` printed its findings to stderr, so the row-level
+            // detail was unreachable from a machine caller.
             Ok(heads::Wrote::Unchanged) => {
-                if !args.json {
-                    println!("aval: {} already current", path.display());
-                }
+                heads_json_or_text(args, "unchanged", &path, &[]);
                 0
             }
             Ok(heads::Wrote::Written) => {
-                if !args.json {
-                    println!("aval: wrote {}", path.display());
-                }
+                heads_json_or_text(args, "written", &path, &[]);
                 0
             }
             Err(e) => {
@@ -373,19 +373,43 @@ fn cmd_heads(args: &Args) -> i32 {
     } else if args.check {
         let f = heads::findings(&l);
         if f.is_empty() {
-            if !args.json {
-                println!("aval: HEADS.md is current");
-            }
+            heads_json_or_text(args, "current", &path, &[]);
             0
         } else {
-            for x in &f {
-                eprintln!("{}", x);
-            }
+            heads_json_or_text(args, "stale", &path, &f);
             E_FAIL
         }
     } else {
         print!("{}", text);
         0
+    }
+}
+
+/// One place that decides where `heads` output goes, because section 12 says
+/// `--json` writes the result object to stdout and nothing else.
+fn heads_json_or_text(args: &Args, state: &str, path: &std::path::Path, findings: &[Finding]) {
+    if args.json {
+        let j = Json::obj()
+            .set("state", state)
+            .set("file", path.display().to_string())
+            .set(
+                "findings",
+                findings
+                    .iter()
+                    .map(render::finding_json)
+                    .collect::<Vec<_>>(),
+            );
+        println!("{}", j);
+        return;
+    }
+    match state {
+        "current" => println!("aval: HEADS.md is current"),
+        "unchanged" => println!("aval: {} already current", path.display()),
+        "written" => println!("aval: wrote {}", path.display()),
+        _ => {}
+    }
+    for f in findings {
+        eprintln!("{}", f);
     }
 }
 

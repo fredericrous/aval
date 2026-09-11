@@ -2,6 +2,86 @@
 
 ## Unreleased
 
+## v0.3.0
+
+Two defects that four real corpora exposed. **Breaking**, and the two reasons
+are on opposite sides: a formatted `HEADS.md` goes from a finding to clean, and
+`id-matches-filename` relaxes, so a corpus that failed can now pass.
+
+### The projection survives a markdown formatter
+
+`heads-fresh` was exact string equality, and prettier pads table cells and
+rewrites the delimiter row, so a formatted projection read as stale forever.
+Eighteen repositories in the fleet this serves run prettier over their
+markdown; excluding the file from formatting does not scale to eighteen.
+
+Both sides are now canonicalised before comparison. Line endings, a byte-order
+mark, trailing whitespace, trailing blank lines, cell padding and the delimiter
+row's style are normalised away. Nothing else is.
+
+It is a whitelist, not a parser, and that distinction is the design. A reader
+that compared modelled rows would ignore what it does not model, so a paragraph
+added under the banner — or a banner rewritten to say the file is maintained by
+hand — would compare equal and pass indefinitely. Rows compare as an ordered
+sequence, because the projection is sorted and nothing else would enforce that.
+
+Findings now name the row that differs. `heads --write` leaves a file alone
+when it already states the projection, so the formatter's output is not undone
+on every run; anything not already current is overwritten, including a file
+unreadable as a projection, so there is still no state it cannot repair.
+
+Two render bugs had to go first. `cell()` escaped `|` and not `\`, so the
+choice `A\|B` emitted `A\\|B` and produced a five-column row. And `choice`
+accepted a YAML block scalar, so a newline split one record across several
+rows; that is now a Layer A error with its line.
+
+### Specifications can carry decisions
+
+A decision stated in `docs/spec-change-proposals.md` was invisible: one flat
+directory, and every filename without a numeric prefix skipped.
+
+```yaml
+dir: docs/adr
+sources:
+  - docs/spec-change-proposals.md
+```
+
+Literal repository-relative paths, and patterns are refused with the reason. A
+pattern that stops matching drops a record silently — its entries leave the
+graph, whatever it superseded returns as a head, and `resolve` answers `active`
+with a decision that was replaced. A listed file that is missing is an error
+instead. A pattern slightly too wide fails the other way and captures unrelated
+frontmatter.
+
+`sources` supplements `dir`; a file reachable both ways is read once and the
+`dir` rule wins, so mandatory frontmatter is never traded away. How a file was
+found decides how its id is judged, so an ordinary `2024-payments.md` is not
+required to call itself ADR-2024. A listed record carries a slug, which may not
+begin `ADR-`.
+
+`Adr.file` became a repository-relative path, which silently broke two things,
+both fixed here: provenance joined the ADR directory to a name that already
+contained it, and citations resolved every document against the ADR directory
+rather than its own.
+
+### Also
+
+- `status-single-source`: a document claiming approval in prose while its
+  frontmatter already owns it. Narrow by construction — a status line, in the
+  header block, in the four shapes real documents use, with one of four
+  approval words. Rollout prose is silent. Zero findings across four real
+  corpora before shipping.
+- The projection's third column is headed `Record`, not `ADR`, since it holds
+  slug ids too.
+- `heads --json` writes its object to stdout as section 12 always required. It
+  previously printed nothing under `--write`, nothing on a clean `--check`, and
+  findings to stderr.
+- SEMANTICS said "Version 0.1.0-draft" while the tool was at 0.2.0, and §14
+  omitted the exit code `heads --write` actually returns on a write failure.
+- The five conformance projections were never asserted against anything, and
+  the battery carried its own copy of corpus discovery. Both fixed, and there
+  are now CLI tests that run the binary.
+
 ## v0.2.0
 
 **A key can declare which scopes it is decided along.**
