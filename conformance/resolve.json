@@ -15,7 +15,7 @@
     "asserted here: they are fixed in Phase 2 alongside the renderer, and inventing",
     "them before the renderer exists would pin wording nothing has reviewed."
   ],
-  "min_cases": 25,
+  "min_cases": 29,
   "cases": [
     {
       "name": "global_key_resolves_at_default_scope",
@@ -187,6 +187,33 @@
       "query": { "command": "resolve", "key": "mesh.data-plane", "scope": "homelab" },
       "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0001", "matched_scope": "*" },
       "why": "Paired with the previous case: retirement is scoped, not contagious."
+    },
+    {
+      "name": "a_cluster_key_answers_a_cluster_scope",
+      "corpus": "scoped-keys",
+      "query": { "command": "resolve", "key": "cni.routing-mode", "scope": "homelab" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0001", "matched_scope": "homelab" }
+    },
+    {
+      "name": "a_cluster_key_refuses_a_stack_scope",
+      "corpus": "scoped-keys",
+      "query": { "command": "resolve", "key": "cni.routing-mode", "scope": "effect-stack" },
+      "expected": { "verdict": "unknown", "exit": 7, "adr": null, "unknown": "scope-for-key" },
+      "why": "`effect-stack` is a declared scope and `cni.routing-mode` is a registered key, so neither scope-declared nor key-registered catches this. Without the per-key list the query falls back to the default scope and answers about a different axis."
+    },
+    {
+      "name": "a_restricted_key_still_inherits_the_default_scope",
+      "corpus": "scoped-keys",
+      "query": { "command": "resolve", "key": "stack.sql-layer", "scope": "effect-stack" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0002", "matched_scope": "*" },
+      "why": "Restriction narrows which scopes may ask, never the inheritance root they fall back to."
+    },
+    {
+      "name": "an_unrestricted_key_answers_every_declared_scope",
+      "corpus": "scoped-keys",
+      "query": { "command": "resolve", "key": "release.trigger", "scope": "duro-stack" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0003", "matched_scope": "*" },
+      "why": "A key with no scopes list keeps pre-field behaviour exactly."
     }
   ]
 }

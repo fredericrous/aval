@@ -1,0 +1,15 @@
+# A fleet registry: the scope list spans more than one axis. Clusters and stack
+# families are not interchangeable, so each key says which axis it is decided
+# along and `cni.routing-mode@effect-stack` becomes a structural error rather
+# than a question that quietly inherits an answer about something else.
+dir: docs/adr
+scopes: [homelab, cloud, effect-stack, duro-stack]
+keys:
+  cni.routing-mode:
+    description: Pod-to-pod datapath mode
+    scopes: [homelab, cloud]
+  stack.sql-layer:
+    description: How application code reaches SQL
+    scopes: [effect-stack]
+  release.trigger:
+    description: What causes a published artifact

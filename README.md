@@ -57,7 +57,7 @@ that is where an agent left to its own judgment does damage.
 | 4 | `undecided` | the key exists, nothing decided it |
 | 5 | `contradiction` | competing heads. Stop, do not pick one. |
 | 6 | `retired` | an ADR deliberately retired this key |
-| 7 | `unknown` | no such key or scope, with an advisory suggestion |
+| 7 | `unknown` | no such key or scope, or a key not decided on that axis |
 
 Codes `1`, `2` and `3` mean the tool failed, was misused, or could not read the
 corpus. They never overlap a verdict, so "I could not look" is never mistaken

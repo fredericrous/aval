@@ -277,3 +277,125 @@ fn unknown_names_are_rejected_and_carry_no_adr() {
     assert_eq!(v.exit(), 7);
     assert_eq!(v.adr(), None);
 }
+
+// ---------------------------------------------------------------------------
+// Per-key scopes. A fleet corpus mixes scope axes — clusters, stack families,
+// packaging shapes — and a single flat list makes `scope-declared` useless,
+// because nothing then rejects `cni.routing-mode@effect-stack`. A key declaring
+// which scopes it applies to restores the check without splitting the registry.
+
+const REG_SCOPED: &str = "\
+dir: docs/adr
+scopes: [homelab, cloud, effect-stack]
+keys:
+  a.b:
+    scopes: [homelab, cloud]
+  c.d:
+  fleet.only:
+    scopes: []
+";
+
+fn scoped_corpus(docs: &[(&str, &str)]) -> Result<Graph, Vec<Finding>> {
+    let mut adrs = Vec::new();
+    for (name, fm) in docs {
+        let src = format!("---\n{}---\n# stub\n", fm);
+        adrs.push(parse::adr(name, &src).unwrap_or_else(|f| panic!("{}: {:?}", name, f)));
+    }
+    Graph::build(Corpus {
+        registry: parse::registry(".adr.yaml", REG_SCOPED).expect("registry parses"),
+        adrs,
+    })
+}
+
+#[test]
+fn a_key_may_be_decided_at_a_scope_it_declares() {
+    let g = scoped_corpus(&[(
+        "0001-a.md",
+        "id: ADR-0001\nstatus: accepted\ndecisions:\n  - key: a.b\n    scope: cloud\n    choice: X\n    first: true\n",
+    )])
+    .expect("valid");
+    assert_eq!(g.resolve("a.b", "cloud").token(), "active");
+}
+
+#[test]
+fn scope_applies_rejects_a_declared_scope_the_key_does_not_cover() {
+    // `effect-stack` is a perfectly good scope. It is just not an axis
+    // `a.b` is decided along, so this is a Layer A error and not a verdict.
+    match scoped_corpus(&[(
+        "0001-a.md",
+        "id: ADR-0001\nstatus: accepted\ndecisions:\n  - key: a.b\n    scope: effect-stack\n    choice: X\n    first: true\n",
+    )]) {
+        Ok(_) => panic!("expected `scope-applies` to reject this corpus"),
+        Err(f) => {
+            assert!(checks(&f).contains(&"scope-applies"), "got {:?}", checks(&f));
+            // and not the wrong diagnosis
+            assert!(!checks(&f).contains(&"scope-declared"), "got {:?}", checks(&f));
+        }
+    }
+}
+
+#[test]
+fn a_restricted_key_still_decides_at_the_default_scope() {
+    // The default scope is the inheritance root. Restricting a key must not
+    // sever its own fallback.
+    let g = scoped_corpus(&[(
+        "0001-a.md",
+        "id: ADR-0001\nstatus: accepted\ndecisions:\n  - key: a.b\n    choice: X\n    first: true\n",
+    )])
+    .expect("valid");
+    assert_eq!(g.resolve("a.b", "homelab").adr(), Some("ADR-0001"));
+    assert!(matches!(
+        g.resolve("a.b", "homelab"),
+        Verdict::Active {
+            inherited: true,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn an_unrestricted_key_accepts_every_declared_scope() {
+    // The compatibility guarantee: a registry written before `scopes:` existed
+    // keeps its meaning exactly.
+    let g = scoped_corpus(&[(
+        "0001-a.md",
+        "id: ADR-0001\nstatus: accepted\ndecisions:\n  - key: c.d\n    scope: effect-stack\n    choice: X\n    first: true\n",
+    )])
+    .expect("valid");
+    assert_eq!(g.resolve("c.d", "effect-stack").token(), "active");
+}
+
+#[test]
+fn resolving_a_key_outside_its_scopes_is_unknown_and_never_inherits() {
+    // The trap this closes: without the check, the query falls back to the
+    // default scope and answers a question about a different axis with an
+    // `active` verdict, which reads as agreement.
+    let g = scoped_corpus(&[(
+        "0001-a.md",
+        "id: ADR-0001\nstatus: accepted\ndecisions:\n  - key: a.b\n    choice: X\n    first: true\n",
+    )])
+    .expect("valid");
+    let v = g.resolve("a.b", "effect-stack");
+    assert_eq!(v.exit(), 7);
+    assert_eq!(v.adr(), None);
+    assert!(
+        v.note(aval_core::model::Slot {
+            key: "a.b",
+            scope: "effect-stack"
+        })
+        .contains("not decided per"),
+        "{:?}",
+        v
+    );
+}
+
+#[test]
+fn an_empty_scopes_list_means_the_default_scope_only() {
+    let g = scoped_corpus(&[(
+        "0001-a.md",
+        "id: ADR-0001\nstatus: accepted\ndecisions:\n  - key: fleet.only\n    choice: X\n    first: true\n",
+    )])
+    .expect("valid");
+    assert_eq!(g.resolve("fleet.only", "*").token(), "active");
+    assert_eq!(g.resolve("fleet.only", "homelab").exit(), 7);
+}

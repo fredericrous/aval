@@ -43,18 +43,37 @@ pub enum Verdict {
     Internal(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unknown {
     Key,
     Scope,
+    /// The scope is declared and the key is registered, but the registry does
+    /// not apply that key at that scope. The question is malformed rather than
+    /// unanswered, so it is never allowed to fall back to the default scope and
+    /// return an answer about a different axis.
+    ScopeForKey {
+        declared: Vec<String>,
+    },
 }
 
 impl Unknown {
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Unknown::Key => "key",
             Unknown::Scope => "scope",
+            Unknown::ScopeForKey { .. } => "scope-for-key",
         }
+    }
+}
+
+/// The scopes a restricted key admits, for a message. An empty list is a
+/// meaningful declaration, not a missing one: the key is decided fleet-wide
+/// only, so say that rather than printing nothing.
+fn scope_list(declared: &[String]) -> String {
+    if declared.is_empty() {
+        "the default scope only".to_string()
+    } else {
+        declared.join(", ")
     }
 }
 
@@ -96,9 +115,15 @@ impl Verdict {
                 heads.len(),
                 slot
             ),
-            Verdict::Unknown { what, .. } => match what {
+            Verdict::Unknown { what, name, .. } => match what {
                 Unknown::Key => "no such decision key".to_string(),
                 Unknown::Scope => "no such scope".to_string(),
+                Unknown::ScopeForKey { declared } => format!(
+                    "`{}` is not decided per `{}`; the registry applies it to {}",
+                    slot.key,
+                    name,
+                    scope_list(declared)
+                ),
             },
             Verdict::Internal(m) => m.clone(),
         }
@@ -218,6 +243,19 @@ impl Graph {
                     self.corpus.registry.scopes.iter().map(|s| s.as_str()),
                 )
                 .map(str::to_string),
+            };
+        }
+        if !self.corpus.registry.admits(key, scope) {
+            let declared = self
+                .corpus
+                .registry
+                .key(key)
+                .and_then(|d| d.scopes.clone())
+                .unwrap_or_default();
+            return Verdict::Unknown {
+                what: Unknown::ScopeForKey { declared },
+                name: scope.to_string(),
+                suggestion: None,
             };
         }
         self.resolve_at(key, scope, scope)
@@ -375,6 +413,21 @@ fn check_vocabulary(c: &Corpus, out: &mut Vec<Finding>) {
                     a(
                         "scope-declared",
                         format!("scope `{}` is not in the registry{}", e.scope, hint),
+                    )
+                    .at(adr.file.clone(), e.line),
+                );
+            } else if c.registry.has_key(&e.key) && !c.registry.admits(&e.key, &e.scope) {
+                let declared = c.registry.key(&e.key).and_then(|d| d.scopes.clone());
+                out.push(
+                    a(
+                        "scope-applies",
+                        format!(
+                            "`{}` is decided at scope `{}`, but the registry applies \
+                             that key to {}",
+                            e.key,
+                            e.scope,
+                            scope_list(&declared.unwrap_or_default())
+                        ),
                     )
                     .at(adr.file.clone(), e.line),
                 );

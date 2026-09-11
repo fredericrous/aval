@@ -4,7 +4,7 @@
 //! and a script reading stdout are looking at the same word.
 
 use crate::provenance::Provenance;
-use aval_core::graph::{DerivedStatus, Graph, Verdict};
+use aval_core::graph::{DerivedStatus, Graph, Unknown, Verdict};
 use aval_core::json::Json;
 use aval_core::model::{Adr, Finding, Slot};
 
@@ -75,9 +75,20 @@ pub fn verdict_json(v: &Verdict, slot: Slot<'_>, prov: &[(String, Provenance)]) 
             .set("matched_scope", matched_scope.as_str()),
         Verdict::Unknown {
             what, suggestion, ..
-        } => base
-            .set("unknown", what.as_str())
-            .set_opt("suggestion", suggestion.clone()),
+        } => {
+            let b = base
+                .set("unknown", what.as_str())
+                .set_opt("suggestion", suggestion.clone());
+            match what {
+                // The caller asked on the wrong axis; give it the right one
+                // rather than only the word "unknown".
+                Unknown::ScopeForKey { declared } => b.set(
+                    "applies_to",
+                    declared.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                ),
+                _ => b,
+            }
+        }
         Verdict::Undecided | Verdict::Internal(_) => base,
     }
 }
@@ -139,6 +150,16 @@ pub fn verdict_text(v: &Verdict, slot: Slot<'_>, prov: &[(String, Provenance)]) 
             name,
             suggestion,
         } => {
+            // A key that does not apply at a declared scope is a different
+            // failure from a name nobody has heard of, and saying "no such
+            // scope" about a scope the registry declares would be false.
+            if matches!(what, Unknown::ScopeForKey { .. }) {
+                s.push_str(&format!("unknown   {}\n", v.note(slot)));
+                s.push_str(
+                    "  The question names the wrong axis. Nothing is wrong with the corpus.\n",
+                );
+                return s;
+            }
             s.push_str(&format!("unknown   no such {} `{}`\n", what.as_str(), name));
             if let Some(g) = suggestion {
                 s.push_str(&format!(

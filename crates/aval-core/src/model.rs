@@ -108,6 +108,24 @@ impl Adr {
 pub struct KeyDef {
     pub name: String,
     pub description: Option<String>,
+    /// Which scopes this key may be decided at. `None` means the key declares
+    /// nothing and accepts every declared scope, so a registry written before
+    /// this field existed keeps its meaning. An empty list is not the same as
+    /// `None`: it says the key is decided fleet-wide only.
+    pub scopes: Option<Vec<String>>,
+}
+
+impl KeyDef {
+    /// The default scope is the inheritance root, so it is admitted whatever
+    /// the key declares. Without that, restricting a key would sever its own
+    /// fallback (SEMANTICS section 5).
+    pub fn admits(&self, scope: &str) -> bool {
+        scope == DEFAULT_SCOPE
+            || match &self.scopes {
+                None => true,
+                Some(list) => list.iter().any(|s| s == scope),
+            }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -123,8 +141,19 @@ impl Registry {
         self.keys.iter().any(|d| d.name == k)
     }
 
+    pub fn key(&self, k: &str) -> Option<&KeyDef> {
+        self.keys.iter().find(|d| d.name == k)
+    }
+
     pub fn has_scope(&self, s: &str) -> bool {
         s == DEFAULT_SCOPE || self.scopes.iter().any(|d| d == s)
+    }
+
+    /// Whether `(key, scope)` is a slot this registry admits at all. An
+    /// unregistered key admits nothing; that is reported as an unknown key
+    /// rather than here.
+    pub fn admits(&self, key: &str, scope: &str) -> bool {
+        self.key(key).is_some_and(|d| d.admits(scope))
     }
 }
 

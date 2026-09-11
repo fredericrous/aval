@@ -75,6 +75,40 @@ keys:
 - `keys` — the closed key vocabulary. `description` is for humans and for the
   did-you-mean index; it carries no semantics.
 
+### 2.1 Per-key scopes
+
+A key MAY declare the scopes it is decided along:
+
+```yaml
+scopes: [homelab, cloud, effect-stack]
+keys:
+  cni.routing-mode:
+    description: Cilium datapath routing mode
+    scopes: [homelab, cloud]
+  stack.sql-layer:
+    description: How application code reaches SQL
+    scopes: [effect-stack]
+```
+
+This exists because a scope list can span more than one axis. Clusters,
+landscapes and stack families are all scopes, and they are not interchangeable.
+With one flat list, `scope-declared` accepts `cni.routing-mode@effect-stack`,
+and §5 fallback then answers it from the default scope — an `active` verdict
+about a different axis, which reads as agreement.
+
+- A key with **no** `scopes` field accepts every declared scope. A registry
+  written before this field existed keeps its meaning exactly.
+- An **empty** list is not the same as absent. It says the key is decided at the
+  default scope only.
+- Every scope a key names MUST be declared in the registry's own `scopes`. A key
+  MUST NOT list `*`.
+- The **default scope is always admitted**, whatever the key declares.
+  Restricting a key MUST NOT sever its own §5 fallback.
+- An entry deciding a key at a scope the key does not admit is a Layer A error
+  (`scope-applies`). A **query** at such a scope returns `unknown` (exit 7) and
+  MUST NOT fall back; the question names the wrong axis rather than going
+  unanswered.
+
 ---
 
 ## 3. ADR format
@@ -284,6 +318,7 @@ resolve(key, scope):
 
   if key   ∉ registry.keys           → unknown        (exit 7)
   if scope ∉ registry.scopes ∪ {*}   → unknown        (exit 7)
+  if ¬ key.admits(scope)             → unknown        (exit 7)   // §2.1
 
   H ← heads(key, scope)
 
@@ -302,7 +337,11 @@ Three properties this pins down:
 `--scope clodu` silently returns the global default, which is exactly the
 failure mode typed non-answers exist to prevent. The did-you-mean in the exit-7
 payload covers both keys and scopes, and it is **advisory**: a caller MUST NOT
-correct a rejected name and proceed.
+correct a rejected name and proceed. The third guard is the same argument one
+level in: a scope can be perfectly well declared and still be the wrong axis for
+the key being asked about, and absorbing that into the fallback would answer
+with an unrelated decision. Its exit-7 payload carries `applies_to` — the axis
+the caller should have asked on — in place of a did-you-mean.
 
 **Retirement blocks fallback.** A retirement is a head, so a retired slot
 returns at `|H| = 1` and never reaches the fallback branch. This is deliberate:
@@ -446,6 +485,7 @@ answering a question.
 | `id-matches-filename` | `id` disagreeing with the filename prefix |
 | `key-registered` | a key absent from the registry |
 | `scope-declared` | a scope absent from the registry |
+| `scope-applies` | a declared scope outside the key's own `scopes` list (§2.1) |
 | `one-entry-per-slot-per-adr` | two entries for one slot in one document |
 | `entry-kind-exclusive` | an entry both choosing and retiring, or neither |
 | `predecessor-declared` | neither or both of `first` and `replaces` (§3.4) |
@@ -615,7 +655,7 @@ Low codes follow the duro CLI. Verdicts start at 4.
 | 4 | verdict | `undecided` |
 | 5 | verdict | `contradiction` |
 | 6 | verdict | `retired` |
-| 7 | verdict | `unknown` key or scope |
+| 7 | verdict | `unknown` key, scope, or key-scope pairing (§2.1) |
 
 **Each command has its own contract.** The table above is `resolve`'s.
 
