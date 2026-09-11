@@ -3,21 +3,19 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/fredericrous/aval/main/install/install.sh | sh
 #
-# This script only installs the binary. It touches no repository.
-# binary, puts it somewhere your shims can find it, and tells you what to run
-# next. That restraint is the point: this project's posture is that nothing
-# runs in a repository you did not ask, and an installer that quietly enabled
-# hooks — or worse, set `init.templateDir` so every future clone got them —
-# would contradict the guarantee on its first contact with your machine.
+# It downloads a checksum-verified binary, puts it on your PATH, and tells you
+# what to run next. Nothing else: it gates no repository and edits no config.
+# That restraint is the point. `aval` is a gate, and an installer that armed
+# one on first contact with your machine would contradict the guarantee on its
+# way in.
 #
-# POSIX sh, no bashisms, because the shims are POSIX sh for the same reason:
-# this has to run wherever git does.
+# POSIX sh, no bashisms: this has to run wherever the rest of the toolchain
+# does, including a minimal CI image with no bash.
 set -eu
 
 REPO="fredericrous/aval"
-# `$HOME/.local/bin` by default, and not arbitrarily: it is candidate 3 in the
-# shim's own resolution order, so a binary here is found even by a shim whose
-# path was never baked.
+# `$HOME/.local/bin` by default: the conventional per-user location, already on
+# PATH in most shells, and writable without sudo.
 BIN_DIR="${AVAL_BIN_DIR:-$HOME/.local/bin}"
 VERSION="${AVAL_VERSION:-latest}"
 
@@ -159,7 +157,7 @@ main() {
     printf '\n'
     case ":$PATH:" in
         *":$BIN_DIR:"*) ;;
-        *) warn "$BIN_DIR is not on your PATH — add it, or the shims will still find the binary but you will not" ;;
+        *) warn "$BIN_DIR is not on your PATH — add it, or a gate that calls \`aval\` by name will report it as missing" ;;
     esac
 
     if [ "$upgrading" -eq 1 ]; then
