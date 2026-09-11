@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+## v0.2.0
+
+**A key can declare which scopes it is decided along.**
+
+```yaml
+scopes: [homelab, cloud, effect-stack]
+keys:
+  cni.routing-mode:
+    scopes: [homelab, cloud]
+```
+
+A scope list can span more than one axis. Clusters, landscapes and stack
+families are all scopes and none of them are interchangeable, so a single flat
+list made `scope-declared` unable to reject `cni.routing-mode@effect-stack` —
+and §5 fallback then answered it from the default scope. That is an `active`
+verdict about a different question, which reads as agreement. This is the change
+the fleet corpus needs before it can hold decisions from more than one axis.
+
+- An entry deciding a key outside its declared scopes is a new Layer A check,
+  `scope-applies`.
+- A query at such a scope returns `unknown` (exit 7) and never falls back. Its
+  JSON payload carries `applies_to`, the axis the caller should have asked on,
+  in place of a did-you-mean.
+- The default scope stays admitted whatever a key declares, so restricting a key
+  cannot sever its own fallback.
+- A key with no `scopes` accepts every declared scope, so every existing
+  registry keeps its meaning. An empty list is not the same as absent: it says
+  the key is decided fleet-wide only.
+
+Spec: SEMANTICS section 2.1. Four conformance cases and a `scoped-keys` corpus.
+
 ## v0.1.1
 
 Fixes two release-workflow bugs that stopped v0.1.0 publishing anything. No

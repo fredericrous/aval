@@ -20,7 +20,7 @@ const ENTRY_FIELDS: &[&str] = &[
     "reason",
 ];
 const REGISTRY_FIELDS: &[&str] = &["dir", "scopes", "keys"];
-const KEYDEF_FIELDS: &[&str] = &["description"];
+const KEYDEF_FIELDS: &[&str] = &["description", "scopes"];
 
 fn a(check: &'static str, msg: impl Into<String>) -> Finding {
     Finding::new(Layer::A, check, msg)
@@ -353,6 +353,48 @@ fn parse_entry(node: &Node, file: &str, out: &mut Vec<Finding>) -> Option<Entry>
     })
 }
 
+/// A scope named in a key's own `scopes:` list must be one the registry
+/// declares. Letting a key name an undeclared scope would resurrect exactly
+/// the hole this field exists to close: a restriction nothing can enforce.
+fn key_scope_check(
+    item: &str,
+    key: &str,
+    declared: &[String],
+    file: &str,
+    line: usize,
+    out: &mut Vec<Finding>,
+) {
+    if item == DEFAULT_SCOPE {
+        out.push(
+            a(
+                "frontmatter-parses",
+                format!(
+                    "`{}` lists `*` in `scopes`; the default scope is always \
+                     admitted and must not be listed",
+                    key
+                ),
+            )
+            .at(file, line),
+        );
+        return;
+    }
+    if !declared.iter().any(|s| s == item) {
+        let hint = suggest(item, declared.iter().map(String::as_str))
+            .map(|s| format!("; did you mean `{}`", s))
+            .unwrap_or_default();
+        out.push(
+            a(
+                "frontmatter-parses",
+                format!(
+                    "`{}` lists scope `{}`, which the registry does not declare{}",
+                    key, item, hint
+                ),
+            )
+            .at(file, line),
+        );
+    }
+}
+
 /// Parse a `.adr.yaml` registry.
 pub fn registry(file: &str, src: &str) -> Result<Registry, Vec<Finding>> {
     let mut out = Vec::new();
@@ -403,15 +445,24 @@ pub fn registry(file: &str, src: &str) -> Result<Registry, Vec<Finding>> {
             ),
             Some(entries) => {
                 for (name, def) in entries {
-                    let description = if def.is_null() {
-                        None
+                    let (description, key_scopes) = if def.is_null() {
+                        (None, None)
                     } else {
                         unknown_fields(def, KEYDEF_FIELDS, "key", file, &mut out);
-                        want_str(def, "description", file, &mut out)
+                        let d = want_str(def, "description", file, &mut out);
+                        let s = def.get("scopes").map(|node| {
+                            let list = want_str_list(def, "scopes", file, &mut out);
+                            for item in &list {
+                                key_scope_check(item, name, &scopes, file, node.line, &mut out);
+                            }
+                            list
+                        });
+                        (d, s)
                     };
                     keys.push(KeyDef {
                         name: name.clone(),
                         description,
+                        scopes: key_scopes,
                     });
                 }
             }
@@ -561,5 +612,57 @@ mod tests {
         let r = registry(".adr.yaml", "dir: d\nscopes: []\nkeys:\n  a.b:\n").expect("parses");
         assert_eq!(r.keys.len(), 1);
         assert!(r.keys[0].description.is_none());
+    }
+
+    #[test]
+    fn a_key_declares_which_scopes_it_applies_to() {
+        let r = registry(
+            ".adr.yaml",
+            "dir: d\nscopes: [homelab, cloud]\nkeys:\n  a.b:\n    scopes: [homelab]\n  c.d:\n",
+        )
+        .expect("parses");
+        assert_eq!(
+            r.keys[0].scopes.as_deref(),
+            Some(&["homelab".to_string()][..])
+        );
+        // Absent is not the same as empty: it declares nothing.
+        assert!(r.keys[1].scopes.is_none());
+        assert!(r.admits("a.b", "homelab"));
+        assert!(!r.admits("a.b", "cloud"));
+        assert!(r.admits("a.b", DEFAULT_SCOPE));
+        assert!(r.admits("c.d", "cloud"));
+    }
+
+    #[test]
+    fn a_key_cannot_name_a_scope_the_registry_does_not_declare() {
+        let e = registry(
+            ".adr.yaml",
+            "dir: d\nscopes: [homelab, cloud]\nkeys:\n  a.b:\n    scopes: [clodu]\n",
+        )
+        .unwrap_err();
+        assert!(e[0].message.contains("does not declare"), "{:?}", e);
+        assert!(e[0].message.contains("did you mean `cloud`"), "{:?}", e);
+    }
+
+    #[test]
+    fn a_key_must_not_list_the_default_scope() {
+        let e = registry(
+            ".adr.yaml",
+            "dir: d\nscopes: [homelab]\nkeys:\n  a.b:\n    scopes: ['*']\n",
+        )
+        .unwrap_err();
+        assert!(e[0].message.contains("always admitted"), "{:?}", e);
+    }
+
+    #[test]
+    fn an_empty_key_scope_list_is_kept_not_collapsed_to_absent() {
+        let r = registry(
+            ".adr.yaml",
+            "dir: d\nscopes: [homelab]\nkeys:\n  a.b:\n    scopes: []\n",
+        )
+        .expect("parses");
+        assert_eq!(r.keys[0].scopes.as_deref(), Some(&[][..]));
+        assert!(!r.admits("a.b", "homelab"));
+        assert!(r.admits("a.b", DEFAULT_SCOPE));
     }
 }
