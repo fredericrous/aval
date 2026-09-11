@@ -313,8 +313,10 @@ fn parse_entry(node: &Node, file: &str, out: &mut Vec<Finding>) -> Option<Entry>
         }
     };
 
-    // Exactly one of first / replaces: SEMANTICS section 3.4.
-    if first == !replaces.is_empty() {
+    // Exactly one of first / replaces: SEMANTICS section 3.4. They agree only
+    // when the entry declared both or neither, and both are wrong.
+    let has_predecessor = !replaces.is_empty();
+    if first == has_predecessor {
         let msg = if first {
             "`first: true` and `replaces:` are mutually exclusive"
         } else {
