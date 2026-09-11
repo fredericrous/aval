@@ -13,3 +13,4 @@ pub mod load;
 pub mod migrate;
 pub mod provenance;
 pub mod render;
+pub mod status;

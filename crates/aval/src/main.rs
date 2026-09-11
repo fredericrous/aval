@@ -5,7 +5,7 @@
 //! section 14. The rule that shapes all of them is that a code meaning "I could
 //! not reach a verdict" never shares a range with a verdict.
 
-use aval::{heads, links, load, migrate, provenance, render};
+use aval::{heads, links, load, migrate, provenance, render, status};
 
 use aval_core::graph::Verdict;
 use aval_core::json::Json;
@@ -265,6 +265,7 @@ fn cmd_check(args: &Args) -> i32 {
     let mut findings = l.graph.single_head_findings();
     findings.extend(links::check(&l));
     findings.extend(heads::findings(&l));
+    findings.extend(status::check(&l));
     findings.extend(manual_index(&l));
     findings.sort_by_key(|a| (a.layer, a.file.clone(), a.line));
 
