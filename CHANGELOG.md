@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## v0.3.1
+
+Fixes a false positive introduced in 0.3.0, found by running the new binary
+against homelab rather than by a test — which is why there is now a test.
+
+0.3.0 gave each document its own base for resolving citations, which was the
+point: a specification in `docs/` must not have `[x](./diagram.svg)` read as
+pointing inside `docs/adr/`. But the repository-relative path handed to the
+gitignore and gitlink checks was computed from that base unconditionally,
+while the existence check still resolved a bare backticked token from the
+repository root. The two disagreed.
+
+The effect: every citation into a git submodule was reported dangling. In
+homelab, `vault-transit-unseal-operator/README.md` became
+`docs/adr/vault-transit-unseal-operator/README.md`, matched no submodule
+prefix, and so was never skipped.
+
+There is now one function deciding the base, and all three consumers use it.
+
 ## v0.3.0
 
 Two defects that four real corpora exposed. **Breaking**, and the two reasons
