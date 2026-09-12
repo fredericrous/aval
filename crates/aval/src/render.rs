@@ -3,10 +3,100 @@
 //! Every verdict prints its machine token first, so a human reading a terminal
 //! and a script reading stdout are looking at the same word.
 
-use crate::provenance::Provenance;
+use crate::provenance::{self, Provenance};
 use aval_core::graph::{DerivedStatus, Graph, Unknown, Verdict};
 use aval_core::json::Json;
 use aval_core::model::{Adr, Finding, Slot};
+use std::path::Path;
+
+/// A resolved answer, with everything either rendering needs.
+///
+/// Resolution is not the whole job: a contradiction is enriched with the commit
+/// that introduced each competing head, and an answer that came from a pack
+/// carries the pack's name. **Both renderings need both**, so a helper that
+/// returned only the JSON would leave its second caller to rebuild the
+/// enrichment — which is how the copy this crate's `lib.rs` records came to
+/// drift. One value, two renderings, one producer.
+pub struct Answer<'a> {
+    pub verdict: Verdict,
+    pub slot: Slot<'a>,
+    pub prov: Vec<(String, Provenance)>,
+    pub pack: Option<String>,
+}
+
+/// Resolve, and enrich the verdict the way both surfaces need it.
+pub fn answer<'a>(g: &Graph, root: &Path, key: &'a str, scope: &'a str) -> Answer<'a> {
+    let verdict = g.resolve(key, scope);
+    let slot = Slot { key, scope };
+
+    // Competing heads are the one verdict where "which commit did this" is
+    // load-bearing, because parallel worktrees make them routine. Enrichment
+    // only; a repository with no history still gets exit 5.
+    let prov = match &verdict {
+        Verdict::Contradiction {
+            heads,
+            matched_scope,
+        } => heads
+            .iter()
+            .map(|id| {
+                let at = Slot {
+                    key,
+                    scope: matched_scope,
+                };
+                let found = g
+                    .heads(at)
+                    .into_iter()
+                    .find(|(a, _)| &a.id == id)
+                    .map(|(a, e)| (a.file.clone(), e.line));
+                match found {
+                    Some((file, line)) => (
+                        id.clone(),
+                        provenance::for_line(root, &root.join(file), line),
+                    ),
+                    None => (id.clone(), Provenance::Unavailable),
+                }
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    // Which pack the answer came from, when it came from one. A consumer has
+    // to be able to tell a decision it can change from one it cannot, and
+    // reading the id prefix works only for somebody who already knows the
+    // convention.
+    let pack = verdict
+        .adr()
+        .and_then(|id| g.corpus().adr(id))
+        .and_then(|a| a.pack.clone());
+
+    Answer {
+        verdict,
+        slot,
+        prov,
+        pack,
+    }
+}
+
+impl Answer<'_> {
+    pub fn exit(&self) -> i32 {
+        self.verdict.exit()
+    }
+
+    pub fn json(&self) -> Json {
+        verdict_json(&self.verdict, self.slot, &self.prov).set_opt("pack", self.pack.clone())
+    }
+
+    pub fn text(&self) -> String {
+        let mut s = verdict_text(&self.verdict, self.slot, &self.prov);
+        if let Some(p) = &self.pack {
+            s.push_str(&format!(
+                "  vendored: from the `{}` pack; change it there, not here\n",
+                p
+            ));
+        }
+        s
+    }
+}
 
 pub fn finding_json(f: &Finding) -> Json {
     Json::obj()

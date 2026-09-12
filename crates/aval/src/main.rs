@@ -5,7 +5,7 @@
 //! section 14. The rule that shapes all of them is that a code meaning "I could
 //! not reach a verdict" never shares a range with a verdict.
 
-use aval::{add, heads, hook, links, load, migrate, packfile, provenance, render, status};
+use aval::{add, heads, hook, links, load, migrate, packfile, render, status};
 
 use aval_core::graph::Verdict;
 use aval_core::json::Json;
@@ -232,67 +232,14 @@ fn cmd_resolve(args: &Args) -> i32 {
         .scope
         .clone()
         .unwrap_or_else(|| DEFAULT_SCOPE.to_string());
-    let verdict = l.graph.resolve(&key, &scope);
-    let slot = Slot {
-        key: &key,
-        scope: &scope,
-    };
-    // Competing heads are the one verdict where "which commit did this" is
-    // load-bearing, because parallel worktrees make them routine. Enrichment
-    // only; a repository with no history still gets exit 5.
-    let prov = match &verdict {
-        Verdict::Contradiction {
-            heads,
-            matched_scope,
-        } => heads
-            .iter()
-            .map(|id| {
-                let at = Slot {
-                    key: &key,
-                    scope: matched_scope,
-                };
-                let found = l
-                    .graph
-                    .heads(at)
-                    .into_iter()
-                    .find(|(a, _)| &a.id == id)
-                    .map(|(a, e)| (a.file.clone(), e.line));
-                match found {
-                    Some((file, line)) => (
-                        id.clone(),
-                        provenance::for_line(&l.root, &l.root.join(file), line),
-                    ),
-                    None => (id.clone(), provenance::Provenance::Unavailable),
-                }
-            })
-            .collect(),
-        _ => Vec::new(),
-    };
-    // Which pack the answer came from, when it came from one. A consumer has
-    // to be able to tell a decision it can change from one it cannot, and
-    // reading the id prefix works only for somebody who already knows the
-    // convention.
-    let from_pack = verdict
-        .adr()
-        .and_then(|id| l.graph.corpus().adr(id))
-        .and_then(|a| a.pack.clone());
-
+    let a = render::answer(&l.graph, &l.root, &key, &scope);
     if args.json {
-        println!(
-            "{}",
-            render::verdict_json(&verdict, slot, &prov).set_opt("pack", from_pack)
-        );
+        println!("{}", a.json());
     } else {
-        print!("{}", render::verdict_text(&verdict, slot, &prov));
-        if let Some(p) = &from_pack {
-            println!(
-                "  vendored: from the `{}` pack; change it there, not here",
-                p
-            );
-        }
+        print!("{}", a.text());
         let _ = std::io::stdout().flush();
     }
-    verdict.exit()
+    a.exit()
 }
 
 fn cmd_check(args: &Args) -> i32 {
