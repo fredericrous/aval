@@ -28,6 +28,7 @@ const LEGACY_FIELDS: &[&str] = &[
 /// The four status values the legacy template allowed.
 const LEGACY_STATUSES: &[&str] = &["Proposed", "Accepted", "Superseded", "Deprecated"];
 
+#[derive(Debug)]
 pub struct Legacy {
     pub file: String,
     /// A `Date` bullet the old template could not parse. Informational: the
@@ -157,6 +158,7 @@ fn read(file: &str, src: &str) -> Legacy {
     }
 }
 
+#[derive(Debug)]
 pub struct Audit {
     pub docs: Vec<Legacy>,
     pub global: Vec<String>,
@@ -174,7 +176,13 @@ pub fn audit(dir: &Path) -> Result<Audit, String> {
     let mut docs = Vec::new();
     let mut global = Vec::new();
     for p in &paths {
-        let file = p.file_name().unwrap().to_string_lossy().to_string();
+        // `file_name` is None for a path ending in `..`, which a caller can
+        // reach by passing one. A total fallback beats a panic in a tool whose
+        // whole contract is typed answers.
+        let file = p
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| p.display().to_string());
         if !file
             .chars()
             .next()

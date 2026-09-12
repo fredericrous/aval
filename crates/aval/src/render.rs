@@ -4,9 +4,9 @@
 //! and a script reading stdout are looking at the same word.
 
 use crate::provenance::{self, Provenance};
-use aval_core::graph::{DerivedStatus, Graph, Unknown, Verdict};
+use aval_core::graph::{DerivedStatus, Graph, Inconsistent, Unknown, Verdict};
 use aval_core::json::Json;
-use aval_core::model::{Adr, Finding, Slot};
+use aval_core::model::{Adr, AdrId, Finding, Slot};
 use aval_core::pack::Pack;
 use std::path::Path;
 
@@ -18,16 +18,26 @@ use std::path::Path;
 /// returned only the JSON would leave its second caller to rebuild the
 /// enrichment — which is how the copy this crate's `lib.rs` records came to
 /// drift. One value, two renderings, one producer.
+#[derive(Debug)]
 pub struct Answer<'a> {
     pub verdict: Verdict,
     pub slot: Slot<'a>,
-    pub prov: Vec<(String, Provenance)>,
+    pub prov: Vec<(AdrId, Provenance)>,
     pub pack: Option<String>,
 }
 
 /// Resolve, and enrich the verdict the way both surfaces need it.
-pub fn answer<'a>(g: &Graph, root: &Path, key: &'a str, scope: &'a str) -> Answer<'a> {
-    let verdict = g.resolve(key, scope);
+///
+/// `Err` is not a verdict and never becomes one: an inconsistent graph means no
+/// question was answered, and every surface must say so in whatever way it says
+/// "the tool could not answer".
+pub fn answer<'a>(
+    g: &Graph,
+    root: &Path,
+    key: &'a str,
+    scope: &'a str,
+) -> Result<Answer<'a>, Inconsistent> {
+    let verdict = g.resolve(key, scope)?;
     let slot = Slot { key, scope };
 
     // Competing heads are the one verdict where "which commit did this" is
@@ -70,12 +80,12 @@ pub fn answer<'a>(g: &Graph, root: &Path, key: &'a str, scope: &'a str) -> Answe
         .and_then(|id| g.corpus().adr(id))
         .and_then(|a| a.pack.clone());
 
-    Answer {
+    Ok(Answer {
         verdict,
         slot,
         prov,
         pack,
-    }
+    })
 }
 
 impl Answer<'_> {
@@ -123,7 +133,7 @@ pub fn finding_json(f: &Finding) -> Json {
         .set_opt("line", f.line)
 }
 
-pub fn verdict_json(v: &Verdict, slot: Slot<'_>, prov: &[(String, Provenance)]) -> Json {
+pub fn verdict_json(v: &Verdict, slot: Slot<'_>, prov: &[(AdrId, Provenance)]) -> Json {
     let base = Json::obj()
         .set("state", v.token())
         .set("exit", v.exit())
@@ -195,11 +205,11 @@ pub fn verdict_json(v: &Verdict, slot: Slot<'_>, prov: &[(String, Provenance)]) 
                 _ => b,
             }
         }
-        Verdict::Undecided | Verdict::Internal(_) => base,
+        Verdict::Undecided => base,
     }
 }
 
-pub fn verdict_text(v: &Verdict, slot: Slot<'_>, prov: &[(String, Provenance)]) -> String {
+pub fn verdict_text(v: &Verdict, slot: Slot<'_>, prov: &[(AdrId, Provenance)]) -> String {
     let mut s = String::new();
     match v {
         Verdict::Active {
@@ -274,7 +284,6 @@ pub fn verdict_text(v: &Verdict, slot: Slot<'_>, prov: &[(String, Provenance)]) 
                 ));
             }
         }
-        Verdict::Internal(m) => s.push_str(&format!("internal   {}\n", m)),
     }
     s
 }
@@ -301,7 +310,7 @@ fn status_word(d: DerivedStatus) -> &'static str {
 /// `None` for an unoccupied slot. The `adrs` list holds several only for a
 /// contradiction, but is a list always — a caller must never have to split a
 /// joined string to find the competing records.
-fn slot_row(g: &Graph, slot: Slot<'_>) -> Option<(&'static str, Vec<String>, Option<String>)> {
+fn slot_row(g: &Graph, slot: Slot<'_>) -> Option<(&'static str, Vec<AdrId>, Option<String>)> {
     let heads = g.heads(slot);
     let state = match heads.len() {
         0 => return None,
@@ -317,7 +326,7 @@ fn slot_row(g: &Graph, slot: Slot<'_>) -> Option<(&'static str, Vec<String>, Opt
     Some((state, adrs, choice))
 }
 
-fn decided_at<'a>(g: &'a Graph, key: &str) -> Vec<(&'a str, &'static str, Vec<String>)> {
+fn decided_at<'a>(g: &'a Graph, key: &str) -> Vec<(&'a str, &'static str, Vec<AdrId>)> {
     g.corpus()
         .slots()
         .into_iter()
@@ -345,7 +354,7 @@ pub fn heads_json(g: &Graph) -> Json {
                     .set("key", slot.key)
                     .set("scope", slot.scope)
                     .set("state", state)
-                    .set("adrs", adrs)
+                    .set("adrs", adrs.iter().map(AdrId::as_str).collect::<Vec<_>>())
                     .set_opt("choice", choice),
             )
         })
@@ -377,7 +386,7 @@ pub fn keys_json(g: &Graph, packs: &[Pack]) -> Json {
                     Json::obj()
                         .set("scope", scope)
                         .set("state", state)
-                        .set("adrs", adrs)
+                        .set("adrs", adrs.iter().map(AdrId::as_str).collect::<Vec<_>>())
                 })
                 .collect();
             Json::obj()

@@ -136,7 +136,7 @@ pub fn render(c: &Corpus) -> String {
     adrs.sort_by(|x, y| x.id.cmp(&y.id));
     o.push_str("records:\n");
     for r in &adrs {
-        o.push_str(&format!("  - id: {}\n", out(&r.id)));
+        o.push_str(&format!("  - id: {}\n", out(r.id.as_str())));
         o.push_str(&format!(
             "    status: {}\n",
             out(match r.status {
@@ -154,17 +154,17 @@ pub fn render(c: &Corpus) -> String {
                 EntryKind::Choice(ch) => o.push_str(&format!("        choice: {}\n", out(ch))),
                 EntryKind::Retire => o.push_str("        retire: true\n"),
             }
-            if e.first {
+            if e.is_first() {
                 o.push_str("        first: true\n");
             }
-            if !e.replaces.is_empty() {
+            if !e.replaces().is_empty() {
                 o.push_str("        replaces:\n");
-                for p in &e.replaces {
-                    o.push_str(&format!("          - {}\n", out(p)));
+                for p in e.replaces() {
+                    o.push_str(&format!("          - {}\n", out(p.as_str())));
                 }
             }
             if let Some(ov) = &e.overrides {
-                o.push_str(&format!("        overrides: {}\n", out(ov)));
+                o.push_str(&format!("        overrides: {}\n", out(ov.as_str())));
             }
             if let Some(rs) = &e.reason {
                 o.push_str(&format!("        reason: {}\n", out(rs)));
@@ -316,11 +316,13 @@ pub fn parse(file: &str, name: &str, src: &str) -> Result<Pack, Vec<Finding>> {
             }
         }
     }
-    let q = |r: &str| -> String {
+    // Qualify a reference only when it points INSIDE this pack; a dangling one
+    // is left alone so the finding names what the document actually said.
+    let q = |r: &str| -> AdrId {
         if ids.iter().any(|i| i == r) {
-            qualify(name, r)
+            AdrId::qualified(name, r)
         } else {
-            r.to_string()
+            AdrId::new(r)
         }
     };
 
@@ -362,7 +364,7 @@ fn record(
     node: &Node,
     file: &str,
     pack: &str,
-    q: &dyn Fn(&str) -> String,
+    q: &dyn Fn(&str) -> AdrId,
     out: &mut Vec<Finding>,
 ) -> Option<Adr> {
     let before = out.len();
@@ -426,15 +428,46 @@ fn record(
                     continue;
                 }
             };
+            let first = flag(e, "first");
+            let replaces: Vec<AdrId> = want_list(e, "replaces", file, out)
+                .iter()
+                .map(|r| q(r))
+                .collect();
+            // A pack is generated and must not be edited by hand, but a
+            // hand-edited one still reaches here. The old shape accepted
+            // `first` and `replaces` together and carried the contradiction
+            // into the graph; the sum type has nowhere to put it, so it is
+            // refused with the rest of the pack.
+            // Same shape as `parse`'s check, and named for the same reason:
+            // the two agree only when the entry declared both or neither.
+            let has_predecessor = !replaces.is_empty();
+            if first == has_predecessor {
+                out.push(
+                    a(
+                        "pack-readable",
+                        format!(
+                            "an entry for `{}` declares {}",
+                            key,
+                            if first {
+                                "both `first` and `replaces`"
+                            } else {
+                                "neither `first` nor `replaces`"
+                            }
+                        ),
+                    )
+                    .at(file.to_string(), e.line),
+                );
+                continue;
+            }
             decisions.push(Entry {
                 key,
                 scope: want(e, "scope", file, out).unwrap_or_else(|| DEFAULT_SCOPE.to_string()),
                 kind,
-                first: flag(e, "first"),
-                replaces: want_list(e, "replaces", file, out)
-                    .iter()
-                    .map(|r| q(r))
-                    .collect(),
+                lineage: if first {
+                    Lineage::First
+                } else {
+                    Lineage::Replaces(replaces)
+                },
                 overrides: want(e, "overrides", file, out).map(|o| q(&o)),
                 reason: want(e, "reason", file, out),
                 line: e.line,
@@ -446,7 +479,7 @@ fn record(
         return None;
     }
     Some(Adr {
-        id: qualify(pack, &id?),
+        id: AdrId::qualified(pack, &id?),
         status,
         decisions,
         // The vendored file, because that is the file in this repository a
@@ -480,8 +513,7 @@ mod tests {
                     key: "stack.sql-layer".into(),
                     scope: "effect-stack".into(),
                     kind: EntryKind::Choice("@effect/sql".into()),
-                    first: true,
-                    replaces: Vec::new(),
+                    lineage: Lineage::First,
                     overrides: None,
                     reason: Some("Kysely # was the alternative".into()),
                     line: 5,
@@ -507,7 +539,7 @@ mod tests {
         let e = &p.adrs[0].decisions[0];
         assert_eq!(e.choice(), Some("@effect/sql"));
         assert_eq!(e.scope, "effect-stack");
-        assert!(e.first);
+        assert!(e.is_first());
         // The value carries ` # `, which an unquoted scalar would have lost to
         // the comment stripper. Quoting every value is what keeps it.
         assert_eq!(e.reason.as_deref(), Some("Kysely # was the alternative"));
@@ -531,7 +563,7 @@ mod tests {
         .enumerate()
         {
             let mut r = c.adrs[0].clone();
-            r.id = format!("ADR-{:04}", 100 + i);
+            r.id = AdrId::new(format!("ADR-{:04}", 100 + i));
             r.decisions[0].kind = EntryKind::Choice((*v).to_string());
             c.adrs.push(r);
         }
@@ -564,13 +596,12 @@ mod tests {
         let mut c = corpus();
         let mut r = c.adrs[0].clone();
         r.id = "ADR-0003".into();
-        r.decisions[0].first = false;
-        r.decisions[0].replaces = vec!["ADR-0002".into(), "ADR-9999".into()];
+        r.decisions[0].lineage = Lineage::Replaces(vec!["ADR-0002".into(), "ADR-9999".into()]);
         c.adrs.push(r);
         let p = parse("p.yaml", "fleet", &render(&c)).expect("parses");
         let second = p.adrs.iter().find(|x| x.id == "fleet:ADR-0003").unwrap();
         assert_eq!(
-            second.decisions[0].replaces,
+            second.decisions[0].replaces(),
             ["fleet:ADR-0002", "ADR-9999"],
             "a reference that names nothing must stay as written, or the \
              finding would blame a name the producer never used"

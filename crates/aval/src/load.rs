@@ -7,12 +7,14 @@ use aval_core::graph::Graph;
 use aval_core::model::{Corpus, Finding, KeyDef, Layer};
 use aval_core::pack::{self, Pack};
 use aval_core::parse;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const REGISTRY: &str = ".adr.yaml";
 pub const HEADS: &str = "HEADS.md";
 
+#[derive(Debug)]
 pub struct Loaded {
     pub graph: Graph,
     /// Directory holding the registry.
@@ -36,6 +38,7 @@ pub struct Loaded {
     pub packs: Vec<Pack>,
 }
 
+#[derive(Debug)]
 pub enum LoadError {
     /// No registry anywhere above the working directory.
     NoRegistry(PathBuf),
@@ -43,6 +46,40 @@ pub enum LoadError {
     Unreadable(String),
     /// The corpus is structurally invalid: Layer A.
     Invalid(Vec<Finding>),
+}
+
+impl fmt::Display for LoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LoadError::NoRegistry(p) => write!(
+                f,
+                "no {} in {} or any parent directory",
+                REGISTRY,
+                p.display()
+            ),
+            LoadError::Unreadable(m) => f.write_str(m),
+            LoadError::Invalid(_) => f.write_str(
+                "the corpus is structurally invalid; no question can be answered against it",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for LoadError {}
+
+impl LoadError {
+    /// The Layer A findings behind an `Invalid`; empty for the other variants.
+    ///
+    /// Paired with `Display` so a caller renders a load failure without
+    /// matching the variants itself. Two callers did, in two places, and the
+    /// copies were already drifting apart — which is what `lib.rs` exists to
+    /// say about copies.
+    pub fn findings(&self) -> &[Finding] {
+        match self {
+            LoadError::Invalid(f) => f,
+            _ => &[],
+        }
+    }
 }
 
 /// A record found on disk, and which rule found it.
@@ -223,7 +260,7 @@ pub fn load(from: &Path) -> Result<Loaded, LoadError> {
         adrs.extend(p.adrs.iter().cloned());
     }
 
-    let corpus = Corpus { registry, adrs };
+    let corpus = Corpus::new(registry, adrs);
     let graph = Graph::build(corpus).map_err(LoadError::Invalid)?;
     Ok(Loaded {
         graph,

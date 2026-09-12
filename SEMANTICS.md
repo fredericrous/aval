@@ -1,6 +1,6 @@
 # `aval` — normative semantics
 
-Version 0.6.0. This document is the specification. Where an
+Version 0.7.0. This document is the specification. Where an
 implementation and this document disagree, this document is right and the
 implementation is a bug.
 
@@ -972,3 +972,27 @@ This document is versioned with the tool.
 - Clarifying wording without changing behaviour is **patch**.
 
 A change to the conformance fixtures is the signal that behaviour moved.
+
+### 15.1 The library is versioned too
+
+`aval-core` ships to crates.io alongside the binary and shares its version
+number, so one number now carries two contracts: what the tool *does*, above,
+and what the library *exposes*.
+
+They are not the same promise, and the difference decides where
+`#[non_exhaustive]` belongs.
+
+- **A struct may gain a field.** `Entry`, `Adr`, `KeyDef`, `Registry`,
+  `Corpus` and `Finding` are `#[non_exhaustive]`, so a field can be added
+  without breaking a downstream build, and a caller outside the crate starts
+  one through a constructor.
+- **An enum's variants are part of the specification.** `Verdict`, `Unknown`,
+  `Status`, `EntryKind`, `Lineage`, `Layer` and `DerivedStatus` are
+  deliberately NOT marked. Section 14 enumerates the verdicts and their exit
+  codes: adding one is a major change by the rule above, whatever the type
+  system says. Marking them would buy flexibility this document has already
+  refused, and would cost the exhaustiveness check that makes a new variant
+  nobody rendered a compile error rather than a silent omission.
+- `Slot` is the pair `(key, scope)` by definition and will not gain a field.
+  `Json` is a JSON value; a new variant breaks every `match` regardless, and
+  the ones inside this repository should fail to compile when it does.

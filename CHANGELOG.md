@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+## v0.7.0
+
+Nothing a corpus resolves to changes. Every command's output is
+byte-identical to 0.6.0 — verified across the six conformance corpora and
+four real ones, text and JSON, exit codes included. This release is about
+the shape of the code and of the published API.
+
+### Fixed
+
+- **A failure could be reported as an answer.** `Verdict::Internal`
+  carried exit 3 — a *failure* code — inside an enum whose every other
+  variant is a verdict, so "the tool broke" and "here is what was
+  decided" were the same type. Every caller had to remember a variant
+  meaning the opposite of its siblings, and the MCP surface did not: an
+  inconsistent graph would have come back `isError: false`, against the
+  rule §14.1 states. `resolve` returns `Result<Verdict, Inconsistent>`
+  now, and the old shape is unrepresentable.
+
+  Unreachable on a corpus that loaded, since Layer A rejects the
+  replacement cycles that cause it — which is the argument for keeping it
+  out of the success type, not for trusting the caller.
+
+- **A hand-edited pack could declare both `first` and `replaces`.** Pack
+  parsing never checked, and carried the contradiction into the graph.
+  There is nowhere to put it now, so the pack is refused with the rest.
+
+### Changed
+
+- **`aval-core`'s API is versioned deliberately** (§15.1). Structs that
+  may gain a field are `#[non_exhaustive]` with constructors; the enums
+  are not, because §14 enumerates the verdicts and their exit codes, so
+  adding one is major regardless — and marking them would cost the
+  exhaustiveness check that makes an unrendered variant a compile error.
+
+- **An entry's lineage is a sum type.** `first: bool` beside
+  `replaces: Vec<_>` admitted four states where the model has two; the
+  parser already rejected the other two, so the loose shape carried
+  ruled-out states into everything that reads an entry.
+
+- **A record id is `AdrId`, not `String`.** The qualification rule of
+  §2.3 lived in a free function callers had to remember; it is on the
+  type now.
+
+- **`LoadError` renders itself.** Two callers matched its variants to
+  build the same message, and a third was about to.
+
+- **Lints moved into `[workspace.lints]`**, so an editor, a bare
+  `cargo clippy` and CI see one set. `unsafe_code` is now *forbidden*
+  rather than merely absent.
+
+- `heads()` makes one pass with a set instead of two allocations and a
+  linear scan per candidate; `migrate` no longer panics on a path ending
+  in `..`; twenty public types gained `Debug`.
+
 ## v0.6.0
 
 ### Added

@@ -315,7 +315,7 @@ pub fn adr(file: &str, src: &str, origin: Origin) -> Result<Adr, Vec<Finding>> {
 
     if out.is_empty() {
         Ok(Adr {
-            id,
+            id: AdrId::new(id),
             status,
             decisions,
             file: file.to_string(),
@@ -438,9 +438,15 @@ fn parse_entry(node: &Node, file: &str, out: &mut Vec<Finding>) -> Option<Entry>
         key: key?,
         scope,
         kind,
-        first,
-        replaces,
-        overrides,
+        // Safe past the check above: it returned None unless exactly one of
+        // the two was declared, which is what makes the sum type honest here
+        // rather than a second place the rule is stated.
+        lineage: if first {
+            Lineage::First
+        } else {
+            Lineage::Replaces(replaces.into_iter().map(AdrId::new).collect())
+        },
+        overrides: overrides.map(AdrId::new),
         reason,
         line: node.line,
     })

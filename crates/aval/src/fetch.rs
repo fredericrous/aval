@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// A source, as the user wrote it.
+#[derive(Debug)]
 pub struct Source {
     /// The spec minus any `@rev`. Identity, and what is reported.
     pub label: String,
@@ -210,6 +211,7 @@ pub fn fetch(s: &Source, id: &str, into: &Path, file: &str) -> Result<String, St
 }
 
 /// A scratch directory that removes itself, on the failure path too.
+#[derive(Debug)]
 pub struct Scratch(pub PathBuf);
 
 impl Scratch {

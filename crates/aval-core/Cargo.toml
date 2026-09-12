@@ -14,3 +14,6 @@ rust-version.workspace = true
 # arbitrary YAML, so parsing it here buys precise line-numbered structural
 # errors that a generic deserializer does not give.
 [dependencies]
+
+[lints]
+workspace = true

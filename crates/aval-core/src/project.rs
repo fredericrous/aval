@@ -48,10 +48,14 @@ pub fn render(g: &Graph) -> String {
             Some(c) => active.push((
                 slot.key.to_string(),
                 slot.scope.to_string(),
-                adr.id.clone(),
+                adr.id.to_string(),
                 c.to_string(),
             )),
-            None => retired.push((slot.key.to_string(), slot.scope.to_string(), adr.id.clone())),
+            None => retired.push((
+                slot.key.to_string(),
+                slot.scope.to_string(),
+                adr.id.to_string(),
+            )),
         }
     }
 

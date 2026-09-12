@@ -7,13 +7,15 @@
 //! the decisions, not a failure to build the graph (SEMANTICS section 9).
 
 use crate::model::*;
+use std::collections::BTreeSet;
+use std::fmt;
 
 /// A resolution result. Carries a stable machine token and a stable note, the
 /// shape `PolicyDecision` uses as `rule_fired` plus `reason`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
     Active {
-        adr: String,
+        adr: AdrId,
         choice: String,
         matched_scope: String,
         /// True when the answer came from the default scope by fallback.
@@ -22,13 +24,13 @@ pub enum Verdict {
     },
     Undecided,
     Retired {
-        adr: String,
+        adr: AdrId,
         matched_scope: String,
         inherited: bool,
         reason: Option<String>,
     },
     Contradiction {
-        heads: Vec<String>,
+        heads: Vec<AdrId>,
         /// The slot that actually disagreed, which may be the default scope
         /// reached by fallback rather than the one asked about.
         matched_scope: String,
@@ -38,10 +40,33 @@ pub enum Verdict {
         name: String,
         suggestion: Option<String>,
     },
-    /// Unreachable on a Layer A-clean corpus. Reported as a structural error
-    /// rather than as a verdict, per SEMANTICS section 4.
-    Internal(String),
 }
+
+/// The graph contradicts itself: a slot is occupied and has no head.
+///
+/// Deliberately NOT a `Verdict`. It used to be one, carrying exit 3 — a
+/// FAILURE code — inside an enum whose every other variant is an answer, which
+/// made "the tool broke" indistinguishable from "here is what was decided" at
+/// the type level. Every caller then had to remember a variant that means the
+/// opposite of the others, and one did not: the MCP surface reported it as
+/// `isError: false`, against the rule SEMANTICS section 14.1 states.
+///
+/// Only a replacement cycle can produce it, and Layer A rejects those, so this
+/// is unreachable against a corpus that loaded. That is the argument for
+/// keeping it out of the success type rather than for trusting callers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Inconsistent {
+    pub message: String,
+}
+
+impl fmt::Display for Inconsistent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Inconsistent {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unknown {
@@ -86,7 +111,6 @@ impl Verdict {
             Verdict::Retired { .. } => "retired",
             Verdict::Contradiction { .. } => "contradiction",
             Verdict::Unknown { .. } => "unknown",
-            Verdict::Internal(_) => "internal",
         }
     }
 
@@ -99,7 +123,6 @@ impl Verdict {
             Verdict::Contradiction { .. } => 5,
             Verdict::Retired { .. } => 6,
             Verdict::Unknown { .. } => 7,
-            Verdict::Internal(_) => 3,
         }
     }
 
@@ -125,11 +148,10 @@ impl Verdict {
                     scope_list(declared)
                 ),
             },
-            Verdict::Internal(m) => m.clone(),
         }
     }
 
-    pub fn adr(&self) -> Option<&str> {
+    pub fn adr(&self) -> Option<&AdrId> {
         match self {
             Verdict::Active { adr, .. } | Verdict::Retired { adr, .. } => Some(adr),
             _ => None,
@@ -159,6 +181,7 @@ impl DerivedStatus {
     }
 }
 
+#[derive(Debug)]
 pub struct Graph {
     corpus: Corpus,
 }
@@ -206,25 +229,30 @@ impl Graph {
     }
 
     /// The heads of a slot: accepted, and not replaced by an accepted entry.
+    ///
+    /// One pass over the slot's entries, and set membership rather than a
+    /// linear scan per candidate: `heads` is called once per occupied slot by
+    /// `keys`, `heads --json` and the projection, so the old shape — two
+    /// allocations of the same vector and an O(n·m) `contains` — multiplied
+    /// with the size of the corpus rather than the size of the slot.
     pub fn heads(&self, slot: Slot<'_>) -> Vec<(&Adr, &Entry)> {
-        let replaced: Vec<&str> = self
-            .accepted_at(slot)
+        let at = self.accepted_at(slot);
+        let replaced: BTreeSet<&str> = at
             .iter()
-            .flat_map(|(_, e)| e.replaces.iter().map(|s| s.as_str()))
+            .flat_map(|(_, e)| e.replaces().iter().map(|s| s.as_str()))
             .collect();
-        let mut h: Vec<(&Adr, &Entry)> = self
-            .accepted_at(slot)
+        let mut h: Vec<(&Adr, &Entry)> = at
             .into_iter()
-            .filter(|(a, _)| !replaced.contains(&a.id.as_str()))
+            .filter(|(a, _)| !replaced.contains(a.id.as_str()))
             .collect();
         h.sort_by(|x, y| x.0.id.cmp(&y.0.id));
         h
     }
 
     /// SEMANTICS section 5.
-    pub fn resolve(&self, key: &str, scope: &str) -> Verdict {
+    pub fn resolve(&self, key: &str, scope: &str) -> Result<Verdict, Inconsistent> {
         if !self.corpus.registry.has_key(key) {
-            return Verdict::Unknown {
+            return Ok(Verdict::Unknown {
                 what: Unknown::Key,
                 name: key.to_string(),
                 suggestion: suggest(
@@ -232,10 +260,10 @@ impl Graph {
                     self.corpus.registry.keys.iter().map(|k| k.name.as_str()),
                 )
                 .map(str::to_string),
-            };
+            });
         }
         if !self.corpus.registry.has_scope(scope) {
-            return Verdict::Unknown {
+            return Ok(Verdict::Unknown {
                 what: Unknown::Scope,
                 name: scope.to_string(),
                 suggestion: suggest(
@@ -243,7 +271,7 @@ impl Graph {
                     self.corpus.registry.scopes.iter().map(|s| s.as_str()),
                 )
                 .map(str::to_string),
-            };
+            });
         }
         if !self.corpus.registry.admits(key, scope) {
             let declared = self
@@ -252,27 +280,27 @@ impl Graph {
                 .key(key)
                 .and_then(|d| d.scopes.clone())
                 .unwrap_or_default();
-            return Verdict::Unknown {
+            return Ok(Verdict::Unknown {
                 what: Unknown::ScopeForKey { declared },
                 name: scope.to_string(),
                 suggestion: None,
-            };
+            });
         }
         self.resolve_at(key, scope, scope)
     }
 
-    fn resolve_at(&self, key: &str, scope: &str, queried: &str) -> Verdict {
+    fn resolve_at(&self, key: &str, scope: &str, queried: &str) -> Result<Verdict, Inconsistent> {
         let slot = Slot { key, scope };
         let h = self.heads(slot);
         if h.len() > 1 {
-            return Verdict::Contradiction {
+            return Ok(Verdict::Contradiction {
                 heads: h.iter().map(|(a, _)| a.id.clone()).collect(),
                 matched_scope: scope.to_string(),
-            };
+            });
         }
         if let Some((adr, e)) = h.first() {
             let inherited = scope != queried;
-            return match &e.kind {
+            return Ok(match &e.kind {
                 EntryKind::Choice(c) => Verdict::Active {
                     adr: adr.id.clone(),
                     choice: c.clone(),
@@ -286,20 +314,19 @@ impl Graph {
                     inherited,
                     reason: e.reason.clone(),
                 },
-            };
+            });
         }
         if self.occupied(slot) {
             // Only a replacement cycle can produce this, and Layer A rejects
             // those. Never degrade it into a verdict.
-            return Verdict::Internal(format!(
-                "{} is occupied but has no head; the graph is inconsistent",
-                slot
-            ));
+            return Err(Inconsistent {
+                message: format!("{} is occupied but has no head", slot),
+            });
         }
         if scope != DEFAULT_SCOPE {
             return self.resolve_at(key, DEFAULT_SCOPE, queried);
         }
-        Verdict::Undecided
+        Ok(Verdict::Undecided)
     }
 
     /// The chain for a slot, oldest first. History, explicitly not authority.
@@ -314,7 +341,7 @@ impl Graph {
             }
             order.push(a);
             if let Some(e) = a.entry_at(slot) {
-                for p in &e.replaces {
+                for p in e.replaces() {
                     if let Some(pa) = self.corpus.adr(p) {
                         stack.push(pa);
                     }
@@ -360,7 +387,7 @@ impl Graph {
         for slot in self.corpus.slots() {
             let h = self.heads(slot);
             if h.len() > 1 {
-                let who: Vec<String> = h.iter().map(|(a, _)| a.id.clone()).collect();
+                let who: Vec<AdrId> = h.iter().map(|(a, _)| a.id.clone()).collect();
                 out.push(Finding::new(
                     Layer::B,
                     "single-head",
@@ -439,7 +466,7 @@ fn check_vocabulary(c: &Corpus, out: &mut Vec<Finding>) {
 fn check_edges(c: &Corpus, out: &mut Vec<Finding>) {
     for adr in &c.adrs {
         for e in &adr.decisions {
-            for target in &e.replaces {
+            for target in e.replaces() {
                 match c.adr(target) {
                     None => out.push(
                         a(
@@ -506,7 +533,7 @@ fn check_edges(c: &Corpus, out: &mut Vec<Finding>) {
 fn check_retirements(c: &Corpus, out: &mut Vec<Finding>) {
     for adr in &c.adrs {
         for e in adr.decisions.iter().filter(|e| e.is_retire()) {
-            if !e.first {
+            if !e.is_first() {
                 continue; // the `replaces` branch; `check_edges` covers it
             }
             let global = Slot {
@@ -553,7 +580,7 @@ fn check_cycles(c: &Corpus, out: &mut Vec<Finding>) {
         let mut done: Vec<&str> = Vec::new();
         for adr in &c.adrs {
             if adr.entry_at(slot).is_some() {
-                visit(c, slot, &adr.id, &mut stack, &mut done, out);
+                visit(c, slot, adr.id.as_str(), &mut stack, &mut done, out);
             }
         }
     }
@@ -589,9 +616,9 @@ fn visit<'c>(
     stack.push(id);
     if let Some(adr) = c.adr(id) {
         if let Some(e) = adr.entry_at(slot) {
-            for p in &e.replaces {
+            for p in e.replaces() {
                 if c.adr(p).is_some() {
-                    let pid: &'c str = &c.adr(p).unwrap().id;
+                    let pid: &'c str = c.adr(p).unwrap().id.as_str();
                     visit(c, slot, pid, stack, done, out);
                 }
             }
