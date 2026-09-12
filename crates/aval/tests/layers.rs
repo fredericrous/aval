@@ -270,7 +270,8 @@ fn a_reconciliation_closes_the_diamond() {
     assert_eq!(
         g.resolve("a.b", DEFAULT_SCOPE)
             .expect("the fixture corpus resolves")
-            .adr(),
+            .adr()
+            .map(|a| a.as_str()),
         Some("ADR-0004")
     );
     assert!(g.single_head_findings().is_empty());
@@ -289,7 +290,8 @@ fn a_draft_neither_wins_nor_demotes() {
     assert_eq!(
         g.resolve("a.b", DEFAULT_SCOPE)
             .expect("the fixture corpus resolves")
-            .adr(),
+            .adr()
+            .map(|a| a.as_str()),
         Some("ADR-0001")
     );
 }
@@ -300,7 +302,8 @@ fn an_unoccupied_scope_falls_back_but_a_registered_key_alone_does_not() {
     assert_eq!(
         g.resolve("a.b", "cloud")
             .expect("the fixture corpus resolves")
-            .adr(),
+            .adr()
+            .map(|a| a.as_str()),
         Some("ADR-0001")
     );
     assert_eq!(
@@ -408,7 +411,8 @@ fn a_restricted_key_still_decides_at_the_default_scope() {
     assert_eq!(
         g.resolve("a.b", "homelab")
             .expect("the fixture corpus resolves")
-            .adr(),
+            .adr()
+            .map(|a| a.as_str()),
         Some("ADR-0001")
     );
     assert!(matches!(

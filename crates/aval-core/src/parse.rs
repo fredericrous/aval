@@ -315,7 +315,7 @@ pub fn adr(file: &str, src: &str, origin: Origin) -> Result<Adr, Vec<Finding>> {
 
     if out.is_empty() {
         Ok(Adr {
-            id,
+            id: AdrId::new(id),
             status,
             decisions,
             file: file.to_string(),
@@ -444,9 +444,9 @@ fn parse_entry(node: &Node, file: &str, out: &mut Vec<Finding>) -> Option<Entry>
         lineage: if first {
             Lineage::First
         } else {
-            Lineage::Replaces(replaces)
+            Lineage::Replaces(replaces.into_iter().map(AdrId::new).collect())
         },
-        overrides,
+        overrides: overrides.map(AdrId::new),
         reason,
         line: node.line,
     })

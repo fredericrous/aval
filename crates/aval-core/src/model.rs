@@ -27,6 +27,83 @@ impl Status {
     }
 }
 
+/// A record's identity: `ADR-0002` locally, `decisions:ADR-0002` once vendored.
+///
+/// A newtype because an id was otherwise a `String` among other `String`s — a
+/// key, a scope and a choice are all the same type to the compiler — and
+/// because the qualification rule of SEMANTICS section 2.3 lived in a free
+/// function somebody had to remember to call. It lives on the type now.
+///
+/// `Borrow<str>` is implemented so a `BTreeSet<AdrId>` answers `contains` for a
+/// `&str` without allocating one id per lookup.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct AdrId(String);
+
+impl AdrId {
+    pub fn new(s: impl Into<String>) -> Self {
+        AdrId(s.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// `<pack>:<id>` — the form a vendored record is referred to by.
+    ///
+    /// Qualification happens when a pack is READ, never when it is written, so
+    /// the file on disk stays byte-equal to what the producer published.
+    pub fn qualified(pack: &str, id: &str) -> Self {
+        AdrId(format!("{}:{}", pack, id))
+    }
+
+    /// The pack this id was vendored from, if it was.
+    pub fn pack(&self) -> Option<&str> {
+        self.0.split_once(':').map(|(p, _)| p)
+    }
+}
+
+impl fmt::Display for AdrId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for AdrId {
+    fn from(s: String) -> Self {
+        AdrId(s)
+    }
+}
+
+impl From<&str> for AdrId {
+    fn from(s: &str) -> Self {
+        AdrId(s.to_string())
+    }
+}
+
+impl AsRef<str> for AdrId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for AdrId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<str> for AdrId {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for AdrId {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
 /// What an entry says about its slot. Exactly one of the two, never both.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntryKind {
@@ -51,7 +128,7 @@ pub enum Lineage {
     /// The first entry for this slot.
     First,
     /// Replaces prior entries in the same slot. Never empty.
-    Replaces(Vec<String>),
+    Replaces(Vec<AdrId>),
 }
 
 /// One decision one ADR makes: SEMANTICS section 1.4.
@@ -61,7 +138,7 @@ pub struct Entry {
     pub scope: String,
     pub kind: EntryKind,
     pub lineage: Lineage,
-    pub overrides: Option<String>,
+    pub overrides: Option<AdrId>,
     pub reason: Option<String>,
     pub line: usize,
 }
@@ -73,7 +150,7 @@ impl Entry {
     }
 
     /// The entries this one replaces; empty for a first entry.
-    pub fn replaces(&self) -> &[String] {
+    pub fn replaces(&self) -> &[AdrId] {
         match &self.lineage {
             Lineage::First => &[],
             Lineage::Replaces(v) => v,
@@ -119,7 +196,7 @@ impl fmt::Display for Slot<'_> {
 
 #[derive(Debug, Clone)]
 pub struct Adr {
-    pub id: String,
+    pub id: AdrId,
     pub status: Status,
     pub decisions: Vec<Entry>,
     /// Repository-relative path, for messages and for `id-matches-filename`.
@@ -296,8 +373,9 @@ pub struct Corpus {
 }
 
 impl Corpus {
-    pub fn adr(&self, id: &str) -> Option<&Adr> {
-        self.adrs.iter().find(|a| a.id == id)
+    pub fn adr(&self, id: impl AsRef<str>) -> Option<&Adr> {
+        let id = id.as_ref();
+        self.adrs.iter().find(|a| a.id.as_str() == id)
     }
 
     /// Every slot any entry occupies, sorted and deduplicated.

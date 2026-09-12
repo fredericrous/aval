@@ -6,7 +6,7 @@
 use crate::provenance::{self, Provenance};
 use aval_core::graph::{DerivedStatus, Graph, Inconsistent, Unknown, Verdict};
 use aval_core::json::Json;
-use aval_core::model::{Adr, Finding, Slot};
+use aval_core::model::{Adr, AdrId, Finding, Slot};
 use aval_core::pack::Pack;
 use std::path::Path;
 
@@ -22,7 +22,7 @@ use std::path::Path;
 pub struct Answer<'a> {
     pub verdict: Verdict,
     pub slot: Slot<'a>,
-    pub prov: Vec<(String, Provenance)>,
+    pub prov: Vec<(AdrId, Provenance)>,
     pub pack: Option<String>,
 }
 
@@ -133,7 +133,7 @@ pub fn finding_json(f: &Finding) -> Json {
         .set_opt("line", f.line)
 }
 
-pub fn verdict_json(v: &Verdict, slot: Slot<'_>, prov: &[(String, Provenance)]) -> Json {
+pub fn verdict_json(v: &Verdict, slot: Slot<'_>, prov: &[(AdrId, Provenance)]) -> Json {
     let base = Json::obj()
         .set("state", v.token())
         .set("exit", v.exit())
@@ -209,7 +209,7 @@ pub fn verdict_json(v: &Verdict, slot: Slot<'_>, prov: &[(String, Provenance)]) 
     }
 }
 
-pub fn verdict_text(v: &Verdict, slot: Slot<'_>, prov: &[(String, Provenance)]) -> String {
+pub fn verdict_text(v: &Verdict, slot: Slot<'_>, prov: &[(AdrId, Provenance)]) -> String {
     let mut s = String::new();
     match v {
         Verdict::Active {
@@ -310,7 +310,7 @@ fn status_word(d: DerivedStatus) -> &'static str {
 /// `None` for an unoccupied slot. The `adrs` list holds several only for a
 /// contradiction, but is a list always — a caller must never have to split a
 /// joined string to find the competing records.
-fn slot_row(g: &Graph, slot: Slot<'_>) -> Option<(&'static str, Vec<String>, Option<String>)> {
+fn slot_row(g: &Graph, slot: Slot<'_>) -> Option<(&'static str, Vec<AdrId>, Option<String>)> {
     let heads = g.heads(slot);
     let state = match heads.len() {
         0 => return None,
@@ -326,7 +326,7 @@ fn slot_row(g: &Graph, slot: Slot<'_>) -> Option<(&'static str, Vec<String>, Opt
     Some((state, adrs, choice))
 }
 
-fn decided_at<'a>(g: &'a Graph, key: &str) -> Vec<(&'a str, &'static str, Vec<String>)> {
+fn decided_at<'a>(g: &'a Graph, key: &str) -> Vec<(&'a str, &'static str, Vec<AdrId>)> {
     g.corpus()
         .slots()
         .into_iter()
@@ -354,7 +354,7 @@ pub fn heads_json(g: &Graph) -> Json {
                     .set("key", slot.key)
                     .set("scope", slot.scope)
                     .set("state", state)
-                    .set("adrs", adrs)
+                    .set("adrs", adrs.iter().map(AdrId::as_str).collect::<Vec<_>>())
                     .set_opt("choice", choice),
             )
         })
@@ -386,7 +386,7 @@ pub fn keys_json(g: &Graph, packs: &[Pack]) -> Json {
                     Json::obj()
                         .set("scope", scope)
                         .set("state", state)
-                        .set("adrs", adrs)
+                        .set("adrs", adrs.iter().map(AdrId::as_str).collect::<Vec<_>>())
                 })
                 .collect();
             Json::obj()

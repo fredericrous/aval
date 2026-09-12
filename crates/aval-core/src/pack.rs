@@ -136,7 +136,7 @@ pub fn render(c: &Corpus) -> String {
     adrs.sort_by(|x, y| x.id.cmp(&y.id));
     o.push_str("records:\n");
     for r in &adrs {
-        o.push_str(&format!("  - id: {}\n", out(&r.id)));
+        o.push_str(&format!("  - id: {}\n", out(r.id.as_str())));
         o.push_str(&format!(
             "    status: {}\n",
             out(match r.status {
@@ -160,11 +160,11 @@ pub fn render(c: &Corpus) -> String {
             if !e.replaces().is_empty() {
                 o.push_str("        replaces:\n");
                 for p in e.replaces() {
-                    o.push_str(&format!("          - {}\n", out(p)));
+                    o.push_str(&format!("          - {}\n", out(p.as_str())));
                 }
             }
             if let Some(ov) = &e.overrides {
-                o.push_str(&format!("        overrides: {}\n", out(ov)));
+                o.push_str(&format!("        overrides: {}\n", out(ov.as_str())));
             }
             if let Some(rs) = &e.reason {
                 o.push_str(&format!("        reason: {}\n", out(rs)));
@@ -316,11 +316,13 @@ pub fn parse(file: &str, name: &str, src: &str) -> Result<Pack, Vec<Finding>> {
             }
         }
     }
-    let q = |r: &str| -> String {
+    // Qualify a reference only when it points INSIDE this pack; a dangling one
+    // is left alone so the finding names what the document actually said.
+    let q = |r: &str| -> AdrId {
         if ids.iter().any(|i| i == r) {
-            qualify(name, r)
+            AdrId::qualified(name, r)
         } else {
-            r.to_string()
+            AdrId::new(r)
         }
     };
 
@@ -362,7 +364,7 @@ fn record(
     node: &Node,
     file: &str,
     pack: &str,
-    q: &dyn Fn(&str) -> String,
+    q: &dyn Fn(&str) -> AdrId,
     out: &mut Vec<Finding>,
 ) -> Option<Adr> {
     let before = out.len();
@@ -427,7 +429,7 @@ fn record(
                 }
             };
             let first = flag(e, "first");
-            let replaces: Vec<String> = want_list(e, "replaces", file, out)
+            let replaces: Vec<AdrId> = want_list(e, "replaces", file, out)
                 .iter()
                 .map(|r| q(r))
                 .collect();
@@ -474,7 +476,7 @@ fn record(
         return None;
     }
     Some(Adr {
-        id: qualify(pack, &id?),
+        id: AdrId::qualified(pack, &id?),
         status,
         decisions,
         // The vendored file, because that is the file in this repository a
@@ -558,7 +560,7 @@ mod tests {
         .enumerate()
         {
             let mut r = c.adrs[0].clone();
-            r.id = format!("ADR-{:04}", 100 + i);
+            r.id = AdrId::new(format!("ADR-{:04}", 100 + i));
             r.decisions[0].kind = EntryKind::Choice((*v).to_string());
             c.adrs.push(r);
         }

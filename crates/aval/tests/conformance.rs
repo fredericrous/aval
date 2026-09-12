@@ -63,7 +63,12 @@ fn run_resolve(case_name: &str, g: &Graph, q: &Json, exp: &Json) {
         if node.is_null() {
             assert_eq!(v.adr(), None, "{}: expected no adr", case_name);
         } else {
-            assert_eq!(v.adr(), node.as_str(), "{}: adr", case_name);
+            assert_eq!(
+                v.adr().map(|a| a.as_str()),
+                node.as_str(),
+                "{}: adr",
+                case_name
+            );
         }
     }
     if let Some(want) = want_str(exp, "matched_scope") {

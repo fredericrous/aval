@@ -15,7 +15,7 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
     Active {
-        adr: String,
+        adr: AdrId,
         choice: String,
         matched_scope: String,
         /// True when the answer came from the default scope by fallback.
@@ -24,13 +24,13 @@ pub enum Verdict {
     },
     Undecided,
     Retired {
-        adr: String,
+        adr: AdrId,
         matched_scope: String,
         inherited: bool,
         reason: Option<String>,
     },
     Contradiction {
-        heads: Vec<String>,
+        heads: Vec<AdrId>,
         /// The slot that actually disagreed, which may be the default scope
         /// reached by fallback rather than the one asked about.
         matched_scope: String,
@@ -150,7 +150,7 @@ impl Verdict {
         }
     }
 
-    pub fn adr(&self) -> Option<&str> {
+    pub fn adr(&self) -> Option<&AdrId> {
         match self {
             Verdict::Active { adr, .. } | Verdict::Retired { adr, .. } => Some(adr),
             _ => None,
@@ -386,7 +386,7 @@ impl Graph {
         for slot in self.corpus.slots() {
             let h = self.heads(slot);
             if h.len() > 1 {
-                let who: Vec<String> = h.iter().map(|(a, _)| a.id.clone()).collect();
+                let who: Vec<AdrId> = h.iter().map(|(a, _)| a.id.clone()).collect();
                 out.push(Finding::new(
                     Layer::B,
                     "single-head",
@@ -579,7 +579,7 @@ fn check_cycles(c: &Corpus, out: &mut Vec<Finding>) {
         let mut done: Vec<&str> = Vec::new();
         for adr in &c.adrs {
             if adr.entry_at(slot).is_some() {
-                visit(c, slot, &adr.id, &mut stack, &mut done, out);
+                visit(c, slot, adr.id.as_str(), &mut stack, &mut done, out);
             }
         }
     }
@@ -617,7 +617,7 @@ fn visit<'c>(
         if let Some(e) = adr.entry_at(slot) {
             for p in e.replaces() {
                 if c.adr(p).is_some() {
-                    let pid: &'c str = &c.adr(p).unwrap().id;
+                    let pid: &'c str = c.adr(p).unwrap().id.as_str();
                     visit(c, slot, pid, stack, done, out);
                 }
             }
