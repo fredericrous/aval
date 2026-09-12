@@ -204,7 +204,15 @@ fn cmd_resolve(args: &Args) -> i32 {
         .scope
         .clone()
         .unwrap_or_else(|| DEFAULT_SCOPE.to_string());
-    let a = render::answer(&l.graph, &l.root, &key, &scope);
+    let a = match render::answer(&l.graph, &l.root, &key, &scope) {
+        Ok(a) => a,
+        // Not a verdict: exit 3 says the corpus could not answer, and the
+        // message names the slot rather than pretending to a result.
+        Err(e) => {
+            emit_error(args, E_INVALID, &e.to_string(), &[]);
+            return E_INVALID;
+        }
+    };
     if args.json {
         println!("{}", a.json());
     } else {

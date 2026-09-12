@@ -64,7 +64,12 @@ const FIRST: &str =
 #[test]
 fn a_minimal_corpus_is_valid() {
     let g = corpus(&[("0001-a.md", FIRST)]).expect("valid");
-    assert_eq!(g.resolve("a.b", DEFAULT_SCOPE).token(), "active");
+    assert_eq!(
+        g.resolve("a.b", DEFAULT_SCOPE)
+            .expect("the fixture corpus resolves")
+            .token(),
+        "active"
+    );
 }
 
 #[test]
@@ -195,10 +200,25 @@ fn a_scoped_retirement_of_an_inherited_default_is_valid_and_blocks_fallback() {
         ),
     ])
     .expect("valid");
-    assert_eq!(g.resolve("a.b", "cloud").token(), "retired");
-    assert_eq!(g.resolve("a.b", "cloud").exit(), 6);
+    assert_eq!(
+        g.resolve("a.b", "cloud")
+            .expect("the fixture corpus resolves")
+            .token(),
+        "retired"
+    );
+    assert_eq!(
+        g.resolve("a.b", "cloud")
+            .expect("the fixture corpus resolves")
+            .exit(),
+        6
+    );
     // A sibling scope still inherits: retirement is scoped, not contagious.
-    assert_eq!(g.resolve("a.b", "homelab").token(), "active");
+    assert_eq!(
+        g.resolve("a.b", "homelab")
+            .expect("the fixture corpus resolves")
+            .token(),
+        "active"
+    );
 }
 
 // ------------------------------------------------------------------ layers
@@ -218,7 +238,9 @@ fn contradiction_is_reachable() {
     ])
     .expect("competing heads are NOT a Layer A failure");
 
-    let v = g.resolve("a.b", DEFAULT_SCOPE);
+    let v = g
+        .resolve("a.b", DEFAULT_SCOPE)
+        .expect("the fixture corpus resolves");
     assert_eq!(v.exit(), 5, "contradiction must not be masked by exit 3");
     match v {
         Verdict::Contradiction { heads, .. } => assert_eq!(heads, ["ADR-0002", "ADR-0003"]),
@@ -245,7 +267,12 @@ fn a_reconciliation_closes_the_diamond() {
         ),
     ])
     .expect("valid");
-    assert_eq!(g.resolve("a.b", DEFAULT_SCOPE).adr(), Some("ADR-0004"));
+    assert_eq!(
+        g.resolve("a.b", DEFAULT_SCOPE)
+            .expect("the fixture corpus resolves")
+            .adr(),
+        Some("ADR-0004")
+    );
     assert!(g.single_head_findings().is_empty());
 }
 
@@ -259,24 +286,48 @@ fn a_draft_neither_wins_nor_demotes() {
         ),
     ])
     .expect("valid");
-    assert_eq!(g.resolve("a.b", DEFAULT_SCOPE).adr(), Some("ADR-0001"));
+    assert_eq!(
+        g.resolve("a.b", DEFAULT_SCOPE)
+            .expect("the fixture corpus resolves")
+            .adr(),
+        Some("ADR-0001")
+    );
 }
 
 #[test]
 fn an_unoccupied_scope_falls_back_but_a_registered_key_alone_does_not() {
     let g = corpus(&[("0001-a.md", FIRST)]).expect("valid");
-    assert_eq!(g.resolve("a.b", "cloud").adr(), Some("ADR-0001"));
-    assert_eq!(g.resolve("c.d", DEFAULT_SCOPE).exit(), 4);
-    assert_eq!(g.resolve("c.d", "cloud").exit(), 4);
+    assert_eq!(
+        g.resolve("a.b", "cloud")
+            .expect("the fixture corpus resolves")
+            .adr(),
+        Some("ADR-0001")
+    );
+    assert_eq!(
+        g.resolve("c.d", DEFAULT_SCOPE)
+            .expect("the fixture corpus resolves")
+            .exit(),
+        4
+    );
+    assert_eq!(
+        g.resolve("c.d", "cloud")
+            .expect("the fixture corpus resolves")
+            .exit(),
+        4
+    );
 }
 
 #[test]
 fn unknown_names_are_rejected_and_carry_no_adr() {
     let g = corpus(&[("0001-a.md", FIRST)]).expect("valid");
-    let v = g.resolve("a.c", DEFAULT_SCOPE);
+    let v = g
+        .resolve("a.c", DEFAULT_SCOPE)
+        .expect("the fixture corpus resolves");
     assert_eq!(v.exit(), 7);
     assert_eq!(v.adr(), None);
-    let v = g.resolve("a.b", "clodu");
+    let v = g
+        .resolve("a.b", "clodu")
+        .expect("the fixture corpus resolves");
     assert_eq!(v.exit(), 7);
     assert_eq!(v.adr(), None);
 }
@@ -320,7 +371,12 @@ fn a_key_may_be_decided_at_a_scope_it_declares() {
         "id: ADR-0001\nstatus: accepted\ndecisions:\n  - key: a.b\n    scope: cloud\n    choice: X\n    first: true\n",
     )])
     .expect("valid");
-    assert_eq!(g.resolve("a.b", "cloud").token(), "active");
+    assert_eq!(
+        g.resolve("a.b", "cloud")
+            .expect("the fixture corpus resolves")
+            .token(),
+        "active"
+    );
 }
 
 #[test]
@@ -349,9 +405,15 @@ fn a_restricted_key_still_decides_at_the_default_scope() {
         "id: ADR-0001\nstatus: accepted\ndecisions:\n  - key: a.b\n    choice: X\n    first: true\n",
     )])
     .expect("valid");
-    assert_eq!(g.resolve("a.b", "homelab").adr(), Some("ADR-0001"));
+    assert_eq!(
+        g.resolve("a.b", "homelab")
+            .expect("the fixture corpus resolves")
+            .adr(),
+        Some("ADR-0001")
+    );
     assert!(matches!(
-        g.resolve("a.b", "homelab"),
+        g.resolve("a.b", "homelab")
+            .expect("the fixture corpus resolves"),
         Verdict::Active {
             inherited: true,
             ..
@@ -368,7 +430,12 @@ fn an_unrestricted_key_accepts_every_declared_scope() {
         "id: ADR-0001\nstatus: accepted\ndecisions:\n  - key: c.d\n    scope: effect-stack\n    choice: X\n    first: true\n",
     )])
     .expect("valid");
-    assert_eq!(g.resolve("c.d", "effect-stack").token(), "active");
+    assert_eq!(
+        g.resolve("c.d", "effect-stack")
+            .expect("the fixture corpus resolves")
+            .token(),
+        "active"
+    );
 }
 
 #[test]
@@ -381,7 +448,9 @@ fn resolving_a_key_outside_its_scopes_is_unknown_and_never_inherits() {
         "id: ADR-0001\nstatus: accepted\ndecisions:\n  - key: a.b\n    choice: X\n    first: true\n",
     )])
     .expect("valid");
-    let v = g.resolve("a.b", "effect-stack");
+    let v = g
+        .resolve("a.b", "effect-stack")
+        .expect("the fixture corpus resolves");
     assert_eq!(v.exit(), 7);
     assert_eq!(v.adr(), None);
     assert!(
@@ -402,6 +471,16 @@ fn an_empty_scopes_list_means_the_default_scope_only() {
         "id: ADR-0001\nstatus: accepted\ndecisions:\n  - key: fleet.only\n    choice: X\n    first: true\n",
     )])
     .expect("valid");
-    assert_eq!(g.resolve("fleet.only", "*").token(), "active");
-    assert_eq!(g.resolve("fleet.only", "homelab").exit(), 7);
+    assert_eq!(
+        g.resolve("fleet.only", "*")
+            .expect("the fixture corpus resolves")
+            .token(),
+        "active"
+    );
+    assert_eq!(
+        g.resolve("fleet.only", "homelab")
+            .expect("the fixture corpus resolves")
+            .exit(),
+        7
+    );
 }

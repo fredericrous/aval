@@ -398,9 +398,15 @@ fn call_resolve(root: &Path, key: &str, scope: Option<&str>) -> Out {
         Err(o) => return o,
     };
     let scope = scope.unwrap_or(DEFAULT_SCOPE);
-    let a = render::answer(&l.graph, &l.root, key, scope);
-    // Every verdict, including `contradiction` and `unknown`, is an answer.
-    Out::ok(a.json(), Some(a.text()))
+    match render::answer(&l.graph, &l.root, key, scope) {
+        // Every verdict, including `contradiction` and `unknown`, is an answer.
+        Ok(a) => Out::ok(a.json(), Some(a.text())),
+        // An inconsistent graph is NOT one. This arm is why `Inconsistent` was
+        // lifted out of `Verdict`: while it was a variant carrying exit 3, this
+        // surface reported it `isError: false` — a failure dressed as an answer,
+        // against the rule SEMANTICS section 14.1 states.
+        Err(e) => Out::failed(render::error_json(3, &e.to_string(), &[])),
+    }
 }
 
 fn call_keys(root: &Path) -> Out {

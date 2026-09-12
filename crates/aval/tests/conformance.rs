@@ -49,7 +49,7 @@ fn want_str<'a>(exp: &'a Json, k: &str) -> Option<&'a str> {
 fn run_resolve(case_name: &str, g: &Graph, q: &Json, exp: &Json) {
     let key = want_str(q, "key").expect("query.key");
     let scope = want_str(q, "scope").unwrap_or(DEFAULT_SCOPE);
-    let v = g.resolve(key, scope);
+    let v = g.resolve(key, scope).expect("the fixture corpus resolves");
 
     if let Some(want) = want_str(exp, "verdict") {
         assert_eq!(v.token(), want, "{}: verdict", case_name);

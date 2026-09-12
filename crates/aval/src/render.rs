@@ -4,7 +4,7 @@
 //! and a script reading stdout are looking at the same word.
 
 use crate::provenance::{self, Provenance};
-use aval_core::graph::{DerivedStatus, Graph, Unknown, Verdict};
+use aval_core::graph::{DerivedStatus, Graph, Inconsistent, Unknown, Verdict};
 use aval_core::json::Json;
 use aval_core::model::{Adr, Finding, Slot};
 use aval_core::pack::Pack;
@@ -27,8 +27,17 @@ pub struct Answer<'a> {
 }
 
 /// Resolve, and enrich the verdict the way both surfaces need it.
-pub fn answer<'a>(g: &Graph, root: &Path, key: &'a str, scope: &'a str) -> Answer<'a> {
-    let verdict = g.resolve(key, scope);
+///
+/// `Err` is not a verdict and never becomes one: an inconsistent graph means no
+/// question was answered, and every surface must say so in whatever way it says
+/// "the tool could not answer".
+pub fn answer<'a>(
+    g: &Graph,
+    root: &Path,
+    key: &'a str,
+    scope: &'a str,
+) -> Result<Answer<'a>, Inconsistent> {
+    let verdict = g.resolve(key, scope)?;
     let slot = Slot { key, scope };
 
     // Competing heads are the one verdict where "which commit did this" is
@@ -71,12 +80,12 @@ pub fn answer<'a>(g: &Graph, root: &Path, key: &'a str, scope: &'a str) -> Answe
         .and_then(|id| g.corpus().adr(id))
         .and_then(|a| a.pack.clone());
 
-    Answer {
+    Ok(Answer {
         verdict,
         slot,
         prov,
         pack,
-    }
+    })
 }
 
 impl Answer<'_> {
@@ -196,7 +205,7 @@ pub fn verdict_json(v: &Verdict, slot: Slot<'_>, prov: &[(String, Provenance)]) 
                 _ => b,
             }
         }
-        Verdict::Undecided | Verdict::Internal(_) => base,
+        Verdict::Undecided => base,
     }
 }
 
@@ -275,7 +284,6 @@ pub fn verdict_text(v: &Verdict, slot: Slot<'_>, prov: &[(String, Provenance)]) 
                 ));
             }
         }
-        Verdict::Internal(m) => s.push_str(&format!("internal   {}\n", m)),
     }
     s
 }

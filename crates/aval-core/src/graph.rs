@@ -8,6 +8,7 @@
 
 use crate::model::*;
 use std::collections::BTreeSet;
+use std::fmt;
 
 /// A resolution result. Carries a stable machine token and a stable note, the
 /// shape `PolicyDecision` uses as `rule_fired` plus `reason`.
@@ -39,10 +40,32 @@ pub enum Verdict {
         name: String,
         suggestion: Option<String>,
     },
-    /// Unreachable on a Layer A-clean corpus. Reported as a structural error
-    /// rather than as a verdict, per SEMANTICS section 4.
-    Internal(String),
 }
+
+/// The graph contradicts itself: a slot is occupied and has no head.
+///
+/// Deliberately NOT a `Verdict`. It used to be one, carrying exit 3 — a
+/// FAILURE code — inside an enum whose every other variant is an answer, which
+/// made "the tool broke" indistinguishable from "here is what was decided" at
+/// the type level. Every caller then had to remember a variant that means the
+/// opposite of the others, and one did not: the MCP surface reported it as
+/// `isError: false`, against the rule SEMANTICS section 14.1 states.
+///
+/// Only a replacement cycle can produce it, and Layer A rejects those, so this
+/// is unreachable against a corpus that loaded. That is the argument for
+/// keeping it out of the success type rather than for trusting callers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Inconsistent {
+    pub message: String,
+}
+
+impl fmt::Display for Inconsistent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Inconsistent {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unknown {
@@ -87,7 +110,6 @@ impl Verdict {
             Verdict::Retired { .. } => "retired",
             Verdict::Contradiction { .. } => "contradiction",
             Verdict::Unknown { .. } => "unknown",
-            Verdict::Internal(_) => "internal",
         }
     }
 
@@ -100,7 +122,6 @@ impl Verdict {
             Verdict::Contradiction { .. } => 5,
             Verdict::Retired { .. } => 6,
             Verdict::Unknown { .. } => 7,
-            Verdict::Internal(_) => 3,
         }
     }
 
@@ -126,7 +147,6 @@ impl Verdict {
                     scope_list(declared)
                 ),
             },
-            Verdict::Internal(m) => m.clone(),
         }
     }
 
@@ -229,9 +249,9 @@ impl Graph {
     }
 
     /// SEMANTICS section 5.
-    pub fn resolve(&self, key: &str, scope: &str) -> Verdict {
+    pub fn resolve(&self, key: &str, scope: &str) -> Result<Verdict, Inconsistent> {
         if !self.corpus.registry.has_key(key) {
-            return Verdict::Unknown {
+            return Ok(Verdict::Unknown {
                 what: Unknown::Key,
                 name: key.to_string(),
                 suggestion: suggest(
@@ -239,10 +259,10 @@ impl Graph {
                     self.corpus.registry.keys.iter().map(|k| k.name.as_str()),
                 )
                 .map(str::to_string),
-            };
+            });
         }
         if !self.corpus.registry.has_scope(scope) {
-            return Verdict::Unknown {
+            return Ok(Verdict::Unknown {
                 what: Unknown::Scope,
                 name: scope.to_string(),
                 suggestion: suggest(
@@ -250,7 +270,7 @@ impl Graph {
                     self.corpus.registry.scopes.iter().map(|s| s.as_str()),
                 )
                 .map(str::to_string),
-            };
+            });
         }
         if !self.corpus.registry.admits(key, scope) {
             let declared = self
@@ -259,27 +279,27 @@ impl Graph {
                 .key(key)
                 .and_then(|d| d.scopes.clone())
                 .unwrap_or_default();
-            return Verdict::Unknown {
+            return Ok(Verdict::Unknown {
                 what: Unknown::ScopeForKey { declared },
                 name: scope.to_string(),
                 suggestion: None,
-            };
+            });
         }
         self.resolve_at(key, scope, scope)
     }
 
-    fn resolve_at(&self, key: &str, scope: &str, queried: &str) -> Verdict {
+    fn resolve_at(&self, key: &str, scope: &str, queried: &str) -> Result<Verdict, Inconsistent> {
         let slot = Slot { key, scope };
         let h = self.heads(slot);
         if h.len() > 1 {
-            return Verdict::Contradiction {
+            return Ok(Verdict::Contradiction {
                 heads: h.iter().map(|(a, _)| a.id.clone()).collect(),
                 matched_scope: scope.to_string(),
-            };
+            });
         }
         if let Some((adr, e)) = h.first() {
             let inherited = scope != queried;
-            return match &e.kind {
+            return Ok(match &e.kind {
                 EntryKind::Choice(c) => Verdict::Active {
                     adr: adr.id.clone(),
                     choice: c.clone(),
@@ -293,20 +313,19 @@ impl Graph {
                     inherited,
                     reason: e.reason.clone(),
                 },
-            };
+            });
         }
         if self.occupied(slot) {
             // Only a replacement cycle can produce this, and Layer A rejects
             // those. Never degrade it into a verdict.
-            return Verdict::Internal(format!(
-                "{} is occupied but has no head; the graph is inconsistent",
-                slot
-            ));
+            return Err(Inconsistent {
+                message: format!("{} is occupied but has no head", slot),
+            });
         }
         if scope != DEFAULT_SCOPE {
             return self.resolve_at(key, DEFAULT_SCOPE, queried);
         }
-        Verdict::Undecided
+        Ok(Verdict::Undecided)
     }
 
     /// The chain for a slot, oldest first. History, explicitly not authority.
