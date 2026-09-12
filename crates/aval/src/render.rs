@@ -18,6 +18,7 @@ use std::path::Path;
 /// returned only the JSON would leave its second caller to rebuild the
 /// enrichment — which is how the copy this crate's `lib.rs` records came to
 /// drift. One value, two renderings, one producer.
+#[derive(Debug)]
 pub struct Answer<'a> {
     pub verdict: Verdict,
     pub slot: Slot<'a>,

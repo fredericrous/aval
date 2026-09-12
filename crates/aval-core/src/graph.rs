@@ -7,6 +7,7 @@
 //! the decisions, not a failure to build the graph (SEMANTICS section 9).
 
 use crate::model::*;
+use std::collections::BTreeSet;
 
 /// A resolution result. Carries a stable machine token and a stable note, the
 /// shape `PolicyDecision` uses as `rule_fired` plus `reason`.
@@ -159,6 +160,7 @@ impl DerivedStatus {
     }
 }
 
+#[derive(Debug)]
 pub struct Graph {
     corpus: Corpus,
 }
@@ -206,16 +208,21 @@ impl Graph {
     }
 
     /// The heads of a slot: accepted, and not replaced by an accepted entry.
+    ///
+    /// One pass over the slot's entries, and set membership rather than a
+    /// linear scan per candidate: `heads` is called once per occupied slot by
+    /// `keys`, `heads --json` and the projection, so the old shape — two
+    /// allocations of the same vector and an O(n·m) `contains` — multiplied
+    /// with the size of the corpus rather than the size of the slot.
     pub fn heads(&self, slot: Slot<'_>) -> Vec<(&Adr, &Entry)> {
-        let replaced: Vec<&str> = self
-            .accepted_at(slot)
+        let at = self.accepted_at(slot);
+        let replaced: BTreeSet<&str> = at
             .iter()
             .flat_map(|(_, e)| e.replaces.iter().map(|s| s.as_str()))
             .collect();
-        let mut h: Vec<(&Adr, &Entry)> = self
-            .accepted_at(slot)
+        let mut h: Vec<(&Adr, &Entry)> = at
             .into_iter()
-            .filter(|(a, _)| !replaced.contains(&a.id.as_str()))
+            .filter(|(a, _)| !replaced.contains(a.id.as_str()))
             .collect();
         h.sort_by(|x, y| x.0.id.cmp(&y.0.id));
         h

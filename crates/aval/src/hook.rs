@@ -85,13 +85,14 @@ if [ -s "$notes" ]; then
 fi
 "#;
 
+#[derive(Debug)]
 pub struct Change {
     pub path: String,
     pub status: Status,
     pub detail: &'static str,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Status {
     Written,
     Unchanged,
@@ -99,6 +100,7 @@ pub enum Status {
     Stale,
 }
 
+#[derive(Debug)]
 pub struct Report {
     pub changes: Vec<Change>,
     /// Paths git would ignore, so the hook would work here and ship to nobody.
@@ -114,6 +116,7 @@ impl Report {
     }
 }
 
+#[derive(Debug)]
 pub enum Error {
     /// `.claude/settings.json` exists and is not JSON. Never clobbered.
     SettingsUnparseable(String),

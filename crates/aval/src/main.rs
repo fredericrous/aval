@@ -11,7 +11,7 @@ use aval_core::graph::Verdict;
 use aval_core::json::Json;
 use aval_core::model::{Finding, Layer, Slot, DEFAULT_SCOPE};
 use aval_core::project;
-use load::{LoadError, Loaded};
+use load::Loaded;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -127,7 +127,7 @@ fn main() -> ExitCode {
         return ExitCode::from(0);
     }
     let code = match parse_args(&argv) {
-        Ok(args) => run(args),
+        Ok(args) => run(&args),
         Err(e) => {
             eprintln!("aval: {}", e);
             eprint!("{}", USAGE);
@@ -139,61 +139,36 @@ fn main() -> ExitCode {
 
 /// Load, or print why not and give the caller the right failure code.
 fn loaded(args: &Args) -> Result<Loaded, i32> {
-    match load::load(&args.dir) {
-        Ok(l) => Ok(l),
-        Err(LoadError::NoRegistry(p)) => {
-            emit_error(
-                args,
-                E_INVALID,
-                &format!(
-                    "no {} in {} or any parent directory",
-                    load::REGISTRY,
-                    p.display()
-                ),
-                Vec::new(),
-            );
-            Err(E_INVALID)
-        }
-        Err(LoadError::Unreadable(m)) => {
-            emit_error(args, E_INVALID, &m, Vec::new());
-            Err(E_INVALID)
-        }
-        Err(LoadError::Invalid(f)) => {
-            emit_error(
-                args,
-                E_INVALID,
-                "the corpus is structurally invalid; no question can be answered against it",
-                f,
-            );
-            Err(E_INVALID)
-        }
-    }
+    load::load(&args.dir).map_err(|e| {
+        emit_error(args, E_INVALID, &e.to_string(), e.findings());
+        E_INVALID
+    })
 }
 
-fn emit_error(args: &Args, exit: i32, message: &str, findings: Vec<Finding>) {
+fn emit_error(args: &Args, exit: i32, message: &str, findings: &[Finding]) {
     if args.json {
-        println!("{}", render::error_json(exit, message, &findings));
+        println!("{}", render::error_json(exit, message, findings));
     } else {
         eprintln!("aval: {}", message);
-        for f in &findings {
+        for f in findings {
             eprintln!("  {}", f);
         }
     }
 }
 
-fn run(args: Args) -> i32 {
+fn run(args: &Args) -> i32 {
     match args.command.as_str() {
-        "resolve" => cmd_resolve(&args),
-        "keys" => cmd_keys(&args),
-        "mcp" => cmd_mcp(&args),
-        "check" => cmd_check(&args),
-        "heads" => cmd_heads(&args),
-        "show" => cmd_show(&args),
-        "history" => cmd_history(&args),
-        "migrate" => cmd_migrate(&args),
-        "hook" => cmd_hook(&args),
-        "pack" => cmd_pack(&args),
-        "add" => cmd_add(&args),
+        "resolve" => cmd_resolve(args),
+        "keys" => cmd_keys(args),
+        "mcp" => cmd_mcp(args),
+        "check" => cmd_check(args),
+        "heads" => cmd_heads(args),
+        "show" => cmd_show(args),
+        "history" => cmd_history(args),
+        "migrate" => cmd_migrate(args),
+        "hook" => cmd_hook(args),
+        "pack" => cmd_pack(args),
+        "add" => cmd_add(args),
         other => {
             eprintln!("aval: unknown command `{}`", other);
             eprint!("{}", USAGE);
@@ -398,12 +373,7 @@ fn cmd_heads(args: &Args) -> i32 {
                 0
             }
             Err(e) => {
-                emit_error(
-                    args,
-                    E_FAIL,
-                    &format!("{}: {}", path.display(), e),
-                    Vec::new(),
-                );
+                emit_error(args, E_FAIL, &format!("{}: {}", path.display(), e), &[]);
                 E_FAIL
             }
         }
@@ -559,12 +529,7 @@ fn cmd_pack(args: &Args) -> i32 {
                 0
             }
             Err(e) => {
-                emit_error(
-                    args,
-                    E_FAIL,
-                    &format!("{}: {}", path.display(), e),
-                    Vec::new(),
-                );
+                emit_error(args, E_FAIL, &format!("{}: {}", path.display(), e), &[]);
                 E_FAIL
             }
         }
@@ -938,7 +903,7 @@ fn cmd_migrate(args: &Args) -> i32 {
             0
         }
         Err(e) => {
-            emit_error(args, E_INVALID, &e, Vec::new());
+            emit_error(args, E_INVALID, &e, &[]);
             E_INVALID
         }
     }

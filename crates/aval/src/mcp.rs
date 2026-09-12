@@ -385,26 +385,11 @@ fn opt_str<'a>(args: Option<&'a Json>, name: &str) -> Option<&'a str> {
 }
 
 /// Load the corpus, or describe why not in the shape the CLI uses for it.
+///
+/// `LoadError` renders itself, so this surface and the CLI cannot disagree
+/// about what a load failure says.
 fn corpus(root: &Path) -> Result<load::Loaded, Out> {
-    load::load(root).map_err(|e| {
-        let (message, findings) = match e {
-            load::LoadError::NoRegistry(p) => (
-                format!(
-                    "no {} in {} or any parent directory",
-                    load::REGISTRY,
-                    p.display()
-                ),
-                Vec::new(),
-            ),
-            load::LoadError::Unreadable(m) => (m, Vec::new()),
-            load::LoadError::Invalid(f) => (
-                "the corpus is structurally invalid; no question can be answered against it"
-                    .to_string(),
-                f,
-            ),
-        };
-        Out::failed(render::error_json(3, &message, &findings))
-    })
+    load::load(root).map_err(|e| Out::failed(render::error_json(3, &e.to_string(), e.findings())))
 }
 
 fn call_resolve(root: &Path, key: &str, scope: Option<&str>) -> Out {

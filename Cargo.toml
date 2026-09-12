@@ -16,6 +16,27 @@ edition = "2021"
 # `aval-core`, and crates.io resolves that by VERSION while a checkout resolves
 # it by PATH, so a manifest carrying its own literal is a release where the two
 # can disagree.
+# The lint set lives here rather than only in CI's clippy invocation, so an
+# editor, a bare `cargo clippy` and the pipeline all see the same rules. A lint
+# that only exists in a workflow argument is a rule contributors meet for the
+# first time when it fails them.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+# Not pedantic wholesale: this is the subset that catches real defects rather
+# than style. `unwrap_used`/`expect_used` are deliberately ABSENT: the test
+# modules use them everywhere by design, CI runs clippy with `-D warnings`, and
+# a lint that cannot be satisfied is a lint that gets turned off.
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stderr = "allow"
+needless_pass_by_value = "warn"
+redundant_clone = "warn"
+
 [workspace.dependencies]
 aval-core = { path = "crates/aval-core", version = "0.6.0" }
 

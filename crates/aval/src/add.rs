@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 /// borrowed decision at once.
 pub const DIR: &str = ".adr/packs";
 
+#[derive(Debug)]
 pub struct Vendored {
     pub name: String,
     pub rel: String,
@@ -117,6 +118,7 @@ pub fn resolve_one(spec: &str, as_name: Option<&str>) -> Result<Vendored, String
 }
 
 /// What writing this one would do, without doing it.
+#[derive(Debug)]
 pub enum Plan {
     New,
     /// Same source, same bytes.
@@ -204,6 +206,7 @@ fn register(root: &Path, rel: &str) -> Result<bool, String> {
 }
 
 /// What a vendored pack's banner says about where it came from.
+#[derive(Debug)]
 pub struct Origin {
     pub name: String,
     pub rel: String,
@@ -213,6 +216,7 @@ pub struct Origin {
 }
 
 /// Whether a vendored pack is still the one its revision names.
+#[derive(Debug)]
 pub enum Standing {
     Current,
     /// The revision now names a different commit.

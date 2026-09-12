@@ -70,6 +70,7 @@ pub fn findings(l: &Loaded) -> Vec<Finding> {
     .in_file(pack::FILE)]
 }
 
+#[derive(Debug)]
 pub enum Wrote {
     Unchanged,
     Written,

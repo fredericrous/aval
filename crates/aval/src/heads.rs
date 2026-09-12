@@ -10,6 +10,7 @@ use aval_core::model::{Finding, Layer};
 use aval_core::project;
 use std::path::PathBuf;
 
+#[derive(Debug)]
 pub enum Freshness {
     Current,
     Missing,
@@ -17,6 +18,7 @@ pub enum Freshness {
     Stale(Vec<Difference>),
 }
 
+#[derive(Debug)]
 pub enum Difference {
     /// A line the file carries that the projection does not.
     Extra(String),
@@ -149,6 +151,7 @@ fn describe(d: &Difference) -> String {
     }
 }
 
+#[derive(Debug)]
 pub enum Wrote {
     /// The file already stated the projection. Its bytes were left alone, so a
     /// formatter's padding survives rather than being undone on every run.
