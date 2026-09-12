@@ -32,6 +32,8 @@ USAGE
     aval pack [--write | --check]          this corpus's declarations, for others to read
     aval add <source>… [--dry-run]         vendor another repository's declarations
     aval add --check                       are the vendored packs still current
+    aval mcp                               serve the corpus as MCP tools on
+                                           stdio, read-only, until stdin closes
 
 SOURCES
     github:owner/repo   forgejo:host/owner/repo   <git-url>   <path>
@@ -48,6 +50,8 @@ EXIT
     resolve  0 active · 4 undecided · 5 contradiction · 6 retired · 7 unknown
     others   0 ok · 1 findings or stale
     always   1 tool failure · 2 usage · 3 unreadable or invalid corpus
+    mcp      0 stdin closed · 1 transport failure · 2 usage. Never 3: a
+             corpus that will not load is reported in the tool result.
 ";
 
 /// Failures, disjoint from every verdict.

@@ -1,6 +1,6 @@
 # `aval` — normative semantics
 
-Version 0.5.0. This document is the specification. Where an
+Version 0.6.0. This document is the specification. Where an
 implementation and this document disagree, this document is right and the
 implementation is a bug.
 
@@ -834,8 +834,6 @@ so §9's guarantee holds: there is no state `--write` cannot repair.
   Duplicating them here would fork the metamodel its federation ADR exists to
   protect.
 
----
-
 ## 13. Provenance
 
 A contradiction should say which commit introduced each competing head. But a
@@ -892,11 +890,18 @@ Low codes follow the duro CLI. Verdicts start at 4.
 | `aval pack --check` | A + C | `0` fresh or not publishing · `1` stale · `2` · `3` |
 | `aval add` | A | `0` · `1` unreachable, ambiguous, or refused · `2` · `3` |
 | `aval add --check` | A | `0` current or unknown · `1` behind · `2` · `3` |
+| `aval keys` | A | `0` · `2` · `3` |
+| `aval mcp` | — at startup | `0` stdin closed · `1` transport failure · `2` |
 
 `hook install` reads no corpus and touches no layer. It wires a session-start
 hook that runs `heads`; whether the corpus resolves is that command's business,
 and the generated script stays **silent** when it does not, because a session
 must not fail over a tool the person who started it has not installed.
+
+`aval mcp` never exits `3`. It reads no corpus at startup, because a registry
+being edited must not take the surface away, and a corpus that will not load is
+reported inside the tool result where the caller can see why. Its exit code
+describes the transport and nothing else.
 
 `aval add --check` reports `0` when a pack's standing cannot be determined —
 offline, moved, access lost. Being unable to ask is not an answer, and a
@@ -907,6 +912,49 @@ separately.
 `check` deliberately reports `1` for any finding regardless of layer, because
 its caller is a git hook, where amont's contract is that `0` passes and anything
 else fails.
+
+### 14.1 The tool surface
+
+`aval mcp` serves the corpus over MCP. It is a second **surface** on the same
+semantics, never a second implementation of them: it resolves through the same
+graph and renders through the same producer as the CLI, and a payload it
+returns is byte-equal to the corresponding `--json` invocation.
+
+**A verdict is not an error.** MCP gives a tool result a single `isError` flag.
+It MUST be `false` for all five verdicts, `contradiction` included, and MAY be
+`true` only where no question was answered at all: a corpus that will not load,
+or a name the corpus does not carry.
+
+The reasoning is section 14's, one level up. A caller that is told the tool
+failed retries it, or works around it. `contradiction` means *stop, do not pick
+one* — the one verdict where working around it is the specific harm the corpus
+exists to prevent — so reporting it as a malfunction inverts the tool. A caller
+distinguishes verdicts by `state` and `exit` inside the payload, exactly as a
+shell caller distinguishes them by exit code.
+
+**A protocol error is for a call that could not be made.** An unknown tool, a
+missing or mistyped argument, a malformed envelope: JSON-RPC errors, because no
+reading of a tool result would help a client fix them. A well-formed call
+naming something the corpus does not carry is a tool result, because it is an
+answer, and it carries the advisory suggestion.
+
+**The corpus is the working tree, read fresh for every call.** The surface
+holds no cached graph. A caller edits records in the same session it asks
+questions in, and an answer from a graph loaded earlier would describe a corpus
+that no longer exists. There is deliberately no revision pinning: the revision
+is the tree, and a decision that is not written down yet is not decided.
+
+**The surface is read-only.** No verb that writes — `heads --write`, `pack
+--write`, `add`, `hook install` — is exposed, and each tool declares
+`readOnlyHint`. Resolving is answering a question; deciding is not something to
+do on a caller's behalf.
+
+Tools MUST carry the caller obligations this document states — that a
+suggestion is advisory (section 5), that only an exact key resolves (section
+12.1), that history is not authority (section 4) — in their descriptions. On a
+shell surface those obligations are enforced by a caller that already knows
+them. On a tool surface the description is where a caller learns them, so
+omitting one silently removes it.
 
 ---
 
