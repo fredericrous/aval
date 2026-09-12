@@ -154,12 +154,12 @@ pub fn render(c: &Corpus) -> String {
                 EntryKind::Choice(ch) => o.push_str(&format!("        choice: {}\n", out(ch))),
                 EntryKind::Retire => o.push_str("        retire: true\n"),
             }
-            if e.first {
+            if e.is_first() {
                 o.push_str("        first: true\n");
             }
-            if !e.replaces.is_empty() {
+            if !e.replaces().is_empty() {
                 o.push_str("        replaces:\n");
-                for p in &e.replaces {
+                for p in e.replaces() {
                     o.push_str(&format!("          - {}\n", out(p)));
                 }
             }
@@ -426,15 +426,43 @@ fn record(
                     continue;
                 }
             };
+            let first = flag(e, "first");
+            let replaces: Vec<String> = want_list(e, "replaces", file, out)
+                .iter()
+                .map(|r| q(r))
+                .collect();
+            // A pack is generated and must not be edited by hand, but a
+            // hand-edited one still reaches here. The old shape accepted
+            // `first` and `replaces` together and carried the contradiction
+            // into the graph; the sum type has nowhere to put it, so it is
+            // refused with the rest of the pack.
+            if first == !replaces.is_empty() {
+                out.push(
+                    a(
+                        "pack-readable",
+                        format!(
+                            "an entry for `{}` declares {}",
+                            key,
+                            if first {
+                                "both `first` and `replaces`"
+                            } else {
+                                "neither `first` nor `replaces`"
+                            }
+                        ),
+                    )
+                    .at(file.to_string(), e.line),
+                );
+                continue;
+            }
             decisions.push(Entry {
                 key,
                 scope: want(e, "scope", file, out).unwrap_or_else(|| DEFAULT_SCOPE.to_string()),
                 kind,
-                first: flag(e, "first"),
-                replaces: want_list(e, "replaces", file, out)
-                    .iter()
-                    .map(|r| q(r))
-                    .collect(),
+                lineage: if first {
+                    Lineage::First
+                } else {
+                    Lineage::Replaces(replaces)
+                },
                 overrides: want(e, "overrides", file, out).map(|o| q(&o)),
                 reason: want(e, "reason", file, out),
                 line: e.line,
@@ -480,8 +508,7 @@ mod tests {
                     key: "stack.sql-layer".into(),
                     scope: "effect-stack".into(),
                     kind: EntryKind::Choice("@effect/sql".into()),
-                    first: true,
-                    replaces: Vec::new(),
+                    lineage: Lineage::First,
                     overrides: None,
                     reason: Some("Kysely # was the alternative".into()),
                     line: 5,
@@ -507,7 +534,7 @@ mod tests {
         let e = &p.adrs[0].decisions[0];
         assert_eq!(e.choice(), Some("@effect/sql"));
         assert_eq!(e.scope, "effect-stack");
-        assert!(e.first);
+        assert!(e.is_first());
         // The value carries ` # `, which an unquoted scalar would have lost to
         // the comment stripper. Quoting every value is what keeps it.
         assert_eq!(e.reason.as_deref(), Some("Kysely # was the alternative"));
@@ -564,13 +591,12 @@ mod tests {
         let mut c = corpus();
         let mut r = c.adrs[0].clone();
         r.id = "ADR-0003".into();
-        r.decisions[0].first = false;
-        r.decisions[0].replaces = vec!["ADR-0002".into(), "ADR-9999".into()];
+        r.decisions[0].lineage = Lineage::Replaces(vec!["ADR-0002".into(), "ADR-9999".into()]);
         c.adrs.push(r);
         let p = parse("p.yaml", "fleet", &render(&c)).expect("parses");
         let second = p.adrs.iter().find(|x| x.id == "fleet:ADR-0003").unwrap();
         assert_eq!(
-            second.decisions[0].replaces,
+            second.decisions[0].replaces(),
             ["fleet:ADR-0002", "ADR-9999"],
             "a reference that names nothing must stay as written, or the \
              finding would blame a name the producer never used"

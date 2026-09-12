@@ -36,20 +36,50 @@ pub enum EntryKind {
     Retire,
 }
 
+/// How an entry relates to what came before it in its slot.
+///
+/// SEMANTICS section 3.4: exactly one of these, never both and never neither.
+/// `parse` already rejects the other two combinations, so a `first: bool`
+/// sitting beside a `replaces: Vec<String>` carried two states the parser had
+/// ruled out into every function that reads an entry.
+///
+/// `overrides` is deliberately NOT in here. It is an orthogonal axis — section
+/// 3.5 permits it on a replacing entry and forbids it only at scope `*` — so
+/// folding it into `First` would encode a constraint the model does not have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lineage {
+    /// The first entry for this slot.
+    First,
+    /// Replaces prior entries in the same slot. Never empty.
+    Replaces(Vec<String>),
+}
+
 /// One decision one ADR makes: SEMANTICS section 1.4.
 #[derive(Debug, Clone)]
 pub struct Entry {
     pub key: String,
     pub scope: String,
     pub kind: EntryKind,
-    pub first: bool,
-    pub replaces: Vec<String>,
+    pub lineage: Lineage,
     pub overrides: Option<String>,
     pub reason: Option<String>,
     pub line: usize,
 }
 
 impl Entry {
+    /// The first entry for its slot, with nothing before it to replace.
+    pub fn is_first(&self) -> bool {
+        matches!(self.lineage, Lineage::First)
+    }
+
+    /// The entries this one replaces; empty for a first entry.
+    pub fn replaces(&self) -> &[String] {
+        match &self.lineage {
+            Lineage::First => &[],
+            Lineage::Replaces(v) => v,
+        }
+    }
+
     pub fn is_retire(&self) -> bool {
         matches!(self.kind, EntryKind::Retire)
     }

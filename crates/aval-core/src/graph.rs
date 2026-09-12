@@ -238,7 +238,7 @@ impl Graph {
         let at = self.accepted_at(slot);
         let replaced: BTreeSet<&str> = at
             .iter()
-            .flat_map(|(_, e)| e.replaces.iter().map(|s| s.as_str()))
+            .flat_map(|(_, e)| e.replaces().iter().map(|s| s.as_str()))
             .collect();
         let mut h: Vec<(&Adr, &Entry)> = at
             .into_iter()
@@ -340,7 +340,7 @@ impl Graph {
             }
             order.push(a);
             if let Some(e) = a.entry_at(slot) {
-                for p in &e.replaces {
+                for p in e.replaces() {
                     if let Some(pa) = self.corpus.adr(p) {
                         stack.push(pa);
                     }
@@ -465,7 +465,7 @@ fn check_vocabulary(c: &Corpus, out: &mut Vec<Finding>) {
 fn check_edges(c: &Corpus, out: &mut Vec<Finding>) {
     for adr in &c.adrs {
         for e in &adr.decisions {
-            for target in &e.replaces {
+            for target in e.replaces() {
                 match c.adr(target) {
                     None => out.push(
                         a(
@@ -532,7 +532,7 @@ fn check_edges(c: &Corpus, out: &mut Vec<Finding>) {
 fn check_retirements(c: &Corpus, out: &mut Vec<Finding>) {
     for adr in &c.adrs {
         for e in adr.decisions.iter().filter(|e| e.is_retire()) {
-            if !e.first {
+            if !e.is_first() {
                 continue; // the `replaces` branch; `check_edges` covers it
             }
             let global = Slot {
@@ -615,7 +615,7 @@ fn visit<'c>(
     stack.push(id);
     if let Some(adr) = c.adr(id) {
         if let Some(e) = adr.entry_at(slot) {
-            for p in &e.replaces {
+            for p in e.replaces() {
                 if c.adr(p).is_some() {
                     let pid: &'c str = &c.adr(p).unwrap().id;
                     visit(c, slot, pid, stack, done, out);
