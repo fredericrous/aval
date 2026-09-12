@@ -4,6 +4,13 @@
 //! the pre-commit path and pulls in nothing. The writer is what `--json` emits;
 //! the reader is what the conformance harness uses to load its fixtures, so the
 //! battery needs no dev-dependency either.
+//!
+//! The reader is **strict**, because it also parses JSON-RPC traffic for
+//! `aval mcp` and that arrives from software nobody here wrote. It rejects what
+//! JSON rejects: an escape outside `" \ / b f n r t u`, an unescaped control
+//! character, and a surrogate that is not half of a well-formed pair. Numbers
+//! carry their integer value exactly (`Json::Int`) so a request id survives the
+//! round trip; only a fractional literal goes through `f64`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -13,6 +20,12 @@ use std::fmt::Write as _;
 pub enum Json {
     Null,
     Bool(bool),
+    /// An integer, kept exact.
+    ///
+    /// `Num` would round anything past 2^53, and a JSON-RPC response MUST carry
+    /// back the same id its request did. "No client sends an id that large" is
+    /// a guess about other people's software, not a contract this can keep.
+    Int(i64),
     Num(f64),
     Str(String),
     Arr(Vec<Json>),
@@ -56,6 +69,7 @@ impl Json {
 
     pub fn as_i64(&self) -> Option<i64> {
         match self {
+            Json::Int(n) => Some(*n),
             Json::Num(n) => Some(*n as i64),
             _ => None,
         }
@@ -76,6 +90,9 @@ impl Json {
         match self {
             Json::Null => out.push_str("null"),
             Json::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Json::Int(n) => {
+                let _ = write!(out, "{}", n);
+            }
             Json::Num(n) => {
                 if n.fract() == 0.0 && n.is_finite() {
                     let _ = write!(out, "{}", *n as i64);
@@ -177,12 +194,22 @@ impl From<bool> for Json {
 }
 impl From<i32> for Json {
     fn from(v: i32) -> Json {
-        Json::Num(v as f64)
+        Json::Int(v as i64)
+    }
+}
+impl From<i64> for Json {
+    fn from(v: i64) -> Json {
+        Json::Int(v)
     }
 }
 impl From<usize> for Json {
+    /// Past `i64::MAX` this falls back to `Num`, which rounds. Nothing in this
+    /// crate counts that high; the arm exists so the conversion is total.
     fn from(v: usize) -> Json {
-        Json::Num(v as f64)
+        match i64::try_from(v) {
+            Ok(n) => Json::Int(n),
+            Err(_) => Json::Num(v as f64),
+        }
     }
 }
 impl<T: Into<Json>> From<Vec<T>> for Json {
@@ -257,11 +284,35 @@ fn number(b: &[char], i: &mut usize) -> Result<Json, String> {
         *i += 1;
     }
     let s: String = b[start..*i].iter().collect();
+    // An integer literal keeps its exact value. Routing it through f64 first
+    // would round a JSON-RPC id past 2^53 before anything could echo it back.
+    if !s.contains(['.', 'e', 'E']) {
+        if let Ok(n) = s.parse::<i64>() {
+            return Ok(Json::Int(n));
+        }
+    }
     s.parse::<f64>()
         .map(Json::Num)
         .map_err(|_| format!("bad number `{}`", s))
 }
 
+/// Four hex digits at `at`, as a code unit.
+fn hex4(b: &[char], at: usize) -> Result<u32, String> {
+    let hex: String = b
+        .get(at..at + 4)
+        .ok_or("truncated `\\u` escape")?
+        .iter()
+        .collect();
+    u32::from_str_radix(&hex, 16).map_err(|_| format!("bad `\\u` escape `{}`", hex))
+}
+
+/// Strict, because this also reads protocol traffic.
+///
+/// The earlier version ended in a catch-all that mapped an unknown escape to
+/// itself and pushed any character at all, so `"\q"` read as `q` and a raw
+/// control character passed silently — both invalid JSON, accepted. It also
+/// decoded each `\u` alone, which rejects the *valid* surrogate pair JSON uses
+/// to spell an astral code point, since neither half is a `char` on its own.
 fn string(b: &[char], i: &mut usize) -> Result<String, String> {
     *i += 1; // opening quote
     let mut out = String::new();
@@ -274,22 +325,49 @@ fn string(b: &[char], i: &mut usize) -> Result<String, String> {
             '\\' => {
                 *i += 1;
                 let c = *b.get(*i).ok_or("unterminated escape")?;
-                out.push(match c {
-                    'n' => '\n',
-                    't' => '\t',
-                    'r' => '\r',
-                    'b' => '\u{8}',
-                    'f' => '\u{c}',
+                match c {
+                    '"' => out.push('"'),
+                    '\\' => out.push('\\'),
+                    '/' => out.push('/'),
+                    'b' => out.push('\u{8}'),
+                    'f' => out.push('\u{c}'),
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
                     'u' => {
-                        let hex: String =
-                            b.get(*i + 1..*i + 5).ok_or("short \\u")?.iter().collect();
+                        let hi = hex4(b, *i + 1)?;
                         *i += 4;
-                        char::from_u32(u32::from_str_radix(&hex, 16).map_err(|_| "bad \\u")?)
-                            .ok_or("bad code point")?
+                        if (0xD800..0xDC00).contains(&hi) {
+                            // A high surrogate is half a character. The other
+                            // half must follow, as its own `\u`.
+                            if b.get(*i + 1) != Some(&'\\') || b.get(*i + 2) != Some(&'u') {
+                                return Err(format!("lone high surrogate `\\u{:04X}`", hi));
+                            }
+                            let lo = hex4(b, *i + 3)?;
+                            if !(0xDC00..0xE000).contains(&lo) {
+                                return Err(format!(
+                                    "`\\u{:04X}` is a high surrogate but `\\u{:04X}` is not a low one",
+                                    hi, lo
+                                ));
+                            }
+                            *i += 6;
+                            let c = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+                            out.push(char::from_u32(c).ok_or("bad surrogate pair")?);
+                        } else if (0xDC00..0xE000).contains(&hi) {
+                            return Err(format!("lone low surrogate `\\u{:04X}`", hi));
+                        } else {
+                            out.push(char::from_u32(hi).ok_or("bad code point")?);
+                        }
                     }
-                    c => c,
-                });
+                    other => return Err(format!("invalid escape `\\{}`", other)),
+                }
                 *i += 1;
+            }
+            c if (c as u32) < 0x20 => {
+                return Err(format!(
+                    "unescaped control character U+{:04X} in a string",
+                    c as u32
+                ))
             }
             c => {
                 out.push(c);
@@ -398,5 +476,81 @@ mod tests {
     #[test]
     fn rejects_trailing_input() {
         assert!(parse("{} {}").is_err());
+    }
+
+    // ------------------------------------------------------------ strictness
+    //
+    // Each of these parsed successfully before, into something the document
+    // did not say. A reader that also handles protocol traffic cannot do that.
+
+    #[test]
+    fn rejects_an_invalid_escape() {
+        let e = parse(r#""a\qb""#).unwrap_err();
+        assert!(e.contains("invalid escape"), "{}", e);
+        // The permitted set, all of it, still reads.
+        assert_eq!(
+            parse(r#""\"\\\/\b\f\n\r\t""#).unwrap(),
+            Json::Str("\"\\/\u{8}\u{c}\n\r\t".into())
+        );
+    }
+
+    #[test]
+    fn rejects_an_unescaped_control_character() {
+        let e = parse("\"a\u{1}b\"").unwrap_err();
+        assert!(e.contains("control character"), "{}", e);
+        assert!(e.contains("U+0001"), "{}", e);
+        // Escaped, the same character is fine.
+        assert_eq!(
+            parse(r##""a\u0001b""##).unwrap(),
+            Json::Str("a\u{1}b".into())
+        );
+    }
+
+    #[test]
+    fn reads_a_surrogate_pair_as_one_character() {
+        // The only way JSON can spell U+1F600, and it used to be rejected.
+        assert_eq!(
+            parse(r##""\uD83D\uDE00""##).unwrap(),
+            Json::Str("\u{1F600}".into())
+        );
+        // A raw astral character needs no escape at all, and still works.
+        assert_eq!(
+            parse("\"\u{1F600}\"").unwrap(),
+            Json::Str("\u{1F600}".into())
+        );
+    }
+
+    #[test]
+    fn rejects_a_lone_surrogate() {
+        assert!(parse(r#""\uD83D""#).unwrap_err().contains("lone high"));
+        assert!(parse(r#""\uDE00""#).unwrap_err().contains("lone low"));
+        assert!(parse(r#""\uD83Dx""#).unwrap_err().contains("lone high"));
+        // A high surrogate followed by a \u that is not a low one.
+        let e = parse(r##""\uD83D\u0041""##).unwrap_err();
+        assert!(e.contains("not a low one"), "{}", e);
+    }
+
+    #[test]
+    fn integers_keep_their_exact_value() {
+        // 2^53 + 1, the first integer f64 cannot represent. A JSON-RPC id this
+        // large has to come back unchanged.
+        let src = r#"{"id":9007199254740993}"#;
+        assert_eq!(parse(src).unwrap().to_string(), src);
+        assert_eq!(parse("-9223372036854775808").unwrap(), Json::Int(i64::MIN));
+        // A fractional literal is still f64, and says so.
+        assert!(matches!(parse("1.5").unwrap(), Json::Num(_)));
+        assert!(matches!(parse("1e3").unwrap(), Json::Num(_)));
+    }
+
+    #[test]
+    fn integer_output_is_unchanged_by_the_int_variant() {
+        // `--json` payloads are a byte-stable contract. `Int` must serialise
+        // exactly as the integral `Num` it replaces did.
+        assert_eq!(Json::from(0).to_string(), "0");
+        assert_eq!(Json::from(-7).to_string(), "-7");
+        assert_eq!(Json::from(42usize).to_string(), "42");
+        assert_eq!(Json::Num(5.0).to_string(), Json::Int(5).to_string());
+        let j = Json::obj().set("exit", 5).set("n", 0usize);
+        assert_eq!(j.to_string(), r#"{"exit":5,"n":0}"#);
     }
 }
