@@ -168,18 +168,7 @@ fn loaded(args: &Args) -> Result<Loaded, i32> {
 
 fn emit_error(args: &Args, exit: i32, message: &str, findings: Vec<Finding>) {
     if args.json {
-        let j = Json::obj()
-            .set("ok", false)
-            .set("exit", exit)
-            .set("error", message)
-            .set(
-                "findings",
-                findings
-                    .iter()
-                    .map(render::finding_json)
-                    .collect::<Vec<_>>(),
-            );
-        println!("{}", j);
+        println!("{}", render::error_json(exit, message, &findings));
     } else {
         eprintln!("aval: {}", message);
         for f in &findings {
@@ -192,6 +181,7 @@ fn run(args: Args) -> i32 {
     match args.command.as_str() {
         "resolve" => cmd_resolve(&args),
         "keys" => cmd_keys(&args),
+        "mcp" => cmd_mcp(&args),
         "check" => cmd_check(&args),
         "heads" => cmd_heads(&args),
         "show" => cmd_show(&args),
@@ -266,6 +256,18 @@ fn cmd_keys(args: &Args) -> i32 {
         let _ = std::io::stdout().flush();
     }
     0
+}
+
+/// Serve the corpus as MCP tools on stdio.
+///
+/// Reads no corpus here: a registry mid-edit must not take the surface away,
+/// and each call loads the working tree fresh anyway.
+fn cmd_mcp(args: &Args) -> i32 {
+    if !args.positional.is_empty() {
+        eprintln!("aval: `mcp` takes no arguments");
+        return E_USAGE;
+    }
+    aval::mcp::serve(&args.dir)
 }
 
 fn cmd_check(args: &Args) -> i32 {

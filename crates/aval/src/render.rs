@@ -99,6 +99,21 @@ impl Answer<'_> {
     }
 }
 
+/// The `--json` error object: a question that could not be asked at all.
+///
+/// Shared so the MCP server reports an unreadable corpus in the same shape the
+/// CLI does, rather than inventing a second one.
+pub fn error_json(exit: i32, message: &str, findings: &[Finding]) -> Json {
+    Json::obj()
+        .set("ok", false)
+        .set("exit", exit)
+        .set("error", message)
+        .set(
+            "findings",
+            findings.iter().map(finding_json).collect::<Vec<_>>(),
+        )
+}
+
 pub fn finding_json(f: &Finding) -> Json {
     Json::obj()
         .set("layer", f.layer.as_str())
