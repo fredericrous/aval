@@ -410,6 +410,12 @@ fn cmd_heads(args: &Args) -> i32 {
             heads_json_or_text(args, "stale", &path, &f);
             E_FAIL
         }
+    } else if args.json {
+        // Section 12: `--json` writes the result object and nothing else. Bare
+        // `heads` used to ignore the flag and print the markdown table, so a
+        // machine caller asking for JSON silently got a document instead.
+        println!("{}", render::heads_json(&l.graph));
+        0
     } else {
         print!("{}", text);
         0
@@ -824,11 +830,7 @@ fn cmd_show(args: &Args) -> i32 {
         if args.json {
             println!(
                 "{}",
-                Json::obj()
-                    .set("state", "unknown")
-                    .set("exit", 7)
-                    .set("adr", id.as_str())
-                    .set_opt("suggestion", sug)
+                render::show_unknown_json(&id, sug.map(|s| s.to_string()))
             );
         } else {
             eprintln!("aval: no such ADR `{}`", id);
@@ -859,12 +861,47 @@ fn cmd_history(args: &Args) -> i32 {
         .scope
         .clone()
         .unwrap_or_else(|| DEFAULT_SCOPE.to_string());
+    // Both rejections used to print to stderr and return 7 with nothing on
+    // stdout, so `history --json` answered a machine caller with silence.
     if !l.graph.registry().has_key(&key) {
-        eprintln!("aval: `{}` is not a registered decision key", key);
+        let names: Vec<&str> = l
+            .graph
+            .registry()
+            .keys
+            .iter()
+            .map(|k| k.name.as_str())
+            .collect();
+        let sug = aval_core::model::suggest(&key, names).map(|s| s.to_string());
+        if args.json {
+            println!("{}", render::history_unknown_json("key", &key, &scope, sug));
+        } else {
+            eprintln!("aval: `{}` is not a registered decision key", key);
+            if let Some(g) = &sug {
+                eprintln!("  did you mean `{}`? A suggestion is advisory.", g);
+            }
+        }
         return 7;
     }
     if !l.graph.registry().has_scope(&scope) {
-        eprintln!("aval: `{}` is not a declared scope", scope);
+        let names: Vec<&str> = l
+            .graph
+            .registry()
+            .scopes
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        let sug = aval_core::model::suggest(&scope, names).map(|s| s.to_string());
+        if args.json {
+            println!(
+                "{}",
+                render::history_unknown_json("scope", &key, &scope, sug)
+            );
+        } else {
+            eprintln!("aval: `{}` is not a declared scope", scope);
+            if let Some(g) = &sug {
+                eprintln!("  did you mean `{}`? A suggestion is advisory.", g);
+            }
+        }
         return 7;
     }
     let slot = Slot {

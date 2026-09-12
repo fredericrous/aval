@@ -280,28 +280,62 @@ fn status_word(d: DerivedStatus) -> &'static str {
 /// "Decided at this scope" and "answers at this scope" are different questions,
 /// and merging them rebuilds the fallback ambiguity §5 exists to prevent. The
 /// caller that wants the effective answer resolves.
+/// One occupied slot: its verdict word, the records behind it, and the choice
+/// when a single accepted record answers.
+///
+/// `None` for an unoccupied slot. The `adrs` list holds several only for a
+/// contradiction, but is a list always — a caller must never have to split a
+/// joined string to find the competing records.
+fn slot_row(g: &Graph, slot: Slot<'_>) -> Option<(&'static str, Vec<String>, Option<String>)> {
+    let heads = g.heads(slot);
+    let state = match heads.len() {
+        0 => return None,
+        1 if heads[0].1.is_retire() => "retired",
+        1 => "active",
+        _ => "contradiction",
+    };
+    let adrs = heads.iter().map(|(a, _)| a.id.clone()).collect();
+    let choice = match heads.len() {
+        1 => heads[0].1.choice().map(|c| c.to_string()),
+        _ => None,
+    };
+    Some((state, adrs, choice))
+}
+
 fn decided_at<'a>(g: &'a Graph, key: &str) -> Vec<(&'a str, &'static str, Vec<String>)> {
-    let mut out = Vec::new();
-    for slot in g.corpus().slots() {
-        if slot.key != key {
-            continue;
-        }
-        let heads = g.heads(slot);
-        let state = match heads.len() {
-            0 => continue,
-            1 if heads[0].1.is_retire() => "retired",
-            1 => "active",
-            _ => "contradiction",
-        };
-        // A list even when there is one, because a contradiction has several
-        // and a caller must not have to split a joined string to find them.
-        out.push((
-            slot.scope,
-            state,
-            heads.iter().map(|(a, _)| a.id.clone()).collect(),
-        ));
-    }
-    out
+    g.corpus()
+        .slots()
+        .into_iter()
+        .filter(|s| s.key == key)
+        .filter_map(|slot| slot_row(g, slot).map(|(state, adrs, _)| (slot.scope, state, adrs)))
+        .collect()
+}
+
+/// Every occupied slot, **including the contradicted ones**.
+///
+/// Deliberately a superset of `HEADS.md`. `project::head_slots` keeps only
+/// slots with exactly one head, so the projection drops a contradicted slot
+/// entirely — right for a document a person reads beside the corpus, wrong for
+/// a caller that would otherwise see a corpus looking settled exactly where it
+/// disagrees with itself.
+pub fn heads_json(g: &Graph) -> Json {
+    let rows: Vec<Json> = g
+        .corpus()
+        .slots()
+        .into_iter()
+        .filter_map(|slot| {
+            let (state, adrs, choice) = slot_row(g, slot)?;
+            Some(
+                Json::obj()
+                    .set("key", slot.key)
+                    .set("scope", slot.scope)
+                    .set("state", state)
+                    .set("adrs", adrs)
+                    .set_opt("choice", choice),
+            )
+        })
+        .collect();
+    Json::obj().set("heads", rows)
 }
 
 /// Which pack declares `key`, if one does.
@@ -398,6 +432,39 @@ pub fn keys_text(g: &Graph, packs: &[Pack]) -> String {
         }
     }
     s
+}
+
+/// The exit-7 object for an ADR id the corpus does not carry.
+///
+/// Byte-for-byte what `cmd_show` built inline. It lives here so the MCP server
+/// answers an unknown record the same way rather than inventing a second shape.
+pub fn show_unknown_json(id: &str, suggestion: Option<String>) -> Json {
+    Json::obj()
+        .set("state", "unknown")
+        .set("exit", 7)
+        .set("adr", id)
+        .set_opt("suggestion", suggestion)
+}
+
+/// The exit-7 object for a key or scope `history` cannot ask about.
+///
+/// `history` had **no** JSON for this at all: both rejections printed to stderr
+/// and returned 7, so `history --json` wrote nothing to stdout and left a
+/// machine caller with an exit code and silence, against section 12. The field
+/// names follow `resolve`'s unknown verdict, because it is the same question.
+pub fn history_unknown_json(
+    what: &str,
+    key: &str,
+    scope: &str,
+    suggestion: Option<String>,
+) -> Json {
+    Json::obj()
+        .set("state", "unknown")
+        .set("exit", 7)
+        .set("key", key)
+        .set("scope", scope)
+        .set("unknown", what)
+        .set_opt("suggestion", suggestion)
 }
 
 pub fn show_json(g: &Graph, adr: &Adr) -> Json {
