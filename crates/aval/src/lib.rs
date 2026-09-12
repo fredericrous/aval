@@ -13,6 +13,7 @@ pub mod heads;
 pub mod hook;
 pub mod links;
 pub mod load;
+pub mod mcp;
 pub mod migrate;
 pub mod packfile;
 pub mod provenance;

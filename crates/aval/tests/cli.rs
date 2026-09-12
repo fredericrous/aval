@@ -333,3 +333,186 @@ fn heads_speaks_json_on_stdout() {
     let got = run(&r, &["heads", "--write", "--json"]);
     assert!(got.out.contains("\"state\":\"unchanged\""), "{}", got.out);
 }
+
+// --- keys ------------------------------------------------------------------
+//
+// Discovery, and the distinctions it must not flatten.
+
+#[test]
+fn keys_lists_the_vocabulary_and_where_each_is_decided() {
+    let r = scratch("keys-basic");
+    write(&r, ".adr.yaml", REGISTRY);
+    write(&r, "docs/adr/0001-one.md", NUMBERED);
+
+    let got = run(&r, &["keys"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(got.out.contains("a.b"), "{}", got.out);
+    assert!(got.out.contains("c.d"), "{}", got.out);
+    // a.b is decided; c.d is declared and undecided, and must still be listed —
+    // a key nothing has answered is exactly what a caller needs to discover.
+    assert!(got.out.contains("active"), "{}", got.out);
+}
+
+#[test]
+fn keys_distinguishes_an_absent_scope_list_from_an_empty_one() {
+    // `null` admits every declared scope; `[]` admits only the default one.
+    // Collapsing either into the other silently changes which questions the
+    // registry says are answerable.
+    let r = scratch("keys-scopes");
+    write(
+        &r,
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [cloud]\nkeys:\n  \
+         open.key:\n  fleet.key:\n    scopes: []\n  narrow.key:\n    scopes: [cloud]\n",
+    );
+    let got = run(&r, &["keys", "--json"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(
+        got.out.contains(r#""key":"open.key","scopes":null"#),
+        "{}",
+        got.out
+    );
+    assert!(
+        got.out.contains(r#""key":"fleet.key","scopes":[]"#),
+        "{}",
+        got.out
+    );
+    assert!(
+        got.out.contains(r#""key":"narrow.key","scopes":["cloud"]"#),
+        "{}",
+        got.out
+    );
+}
+
+#[test]
+fn keys_reports_competing_heads_as_a_list() {
+    // A contradiction has several records. Joining them into one string would
+    // make a caller split it back out, and `adrs` is where they belong.
+    let r = scratch("keys-contradiction");
+    write(
+        &r,
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: []\nkeys:\n  a.b:\n",
+    );
+    write(
+        &r,
+        "docs/adr/0001-one.md",
+        "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  \
+         - key: a.b\n    choice: One\n    first: true\n---\n# one\n",
+    );
+    write(
+        &r,
+        "docs/adr/0002-two.md",
+        "---\nid: ADR-0002\nstatus: accepted\ndecisions:\n  \
+         - key: a.b\n    choice: Two\n    first: true\n---\n# two\n",
+    );
+    let got = run(&r, &["keys", "--json"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(
+        got.out.contains(r#""state":"contradiction""#),
+        "{}",
+        got.out
+    );
+    assert!(
+        got.out.contains(r#""adrs":["ADR-0001","ADR-0002"]"#),
+        "{}",
+        got.out
+    );
+}
+
+#[test]
+fn keys_takes_no_arguments() {
+    let r = scratch("keys-usage");
+    write(&r, ".adr.yaml", REGISTRY);
+    assert_eq!(run(&r, &["keys", "a.b"]).code, 2);
+}
+
+// --- heads --json ----------------------------------------------------------
+
+#[test]
+fn heads_json_reports_a_contradiction_the_projection_omits() {
+    // project::head_slots keeps only slots with exactly one head, so HEADS.md
+    // renders a contradicted corpus as empty: "Active: None", and nothing to
+    // say two records are fighting. That is tolerable in a document a person
+    // reads beside the corpus and not in an answer to a caller, which would
+    // read "None" as settled.
+    let r = scratch("heads-json-contradiction");
+    write(
+        &r,
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: []\nkeys:\n  a.b:\n",
+    );
+    write(
+        &r,
+        "docs/adr/0001-one.md",
+        "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  \
+         - key: a.b\n    choice: One\n    first: true\n---\n# one\n",
+    );
+    write(
+        &r,
+        "docs/adr/0002-two.md",
+        "---\nid: ADR-0002\nstatus: accepted\ndecisions:\n  \
+         - key: a.b\n    choice: Two\n    first: true\n---\n# two\n",
+    );
+
+    let md = run(&r, &["heads"]);
+    assert_eq!(md.code, 0, "{}{}", md.out, md.err);
+    assert!(
+        md.out.contains("None."),
+        "projection should be empty: {}",
+        md.out
+    );
+
+    let got = run(&r, &["heads", "--json"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(
+        got.out.contains(r#""state":"contradiction""#),
+        "{}",
+        got.out
+    );
+    assert!(
+        got.out.contains(r#""adrs":["ADR-0001","ADR-0002"]"#),
+        "{}",
+        got.out
+    );
+}
+
+#[test]
+fn heads_json_writes_the_object_and_nothing_else() {
+    // Bare `heads` ignored --json and printed the markdown table, against
+    // section 12's "--json writes the result object to stdout and nothing
+    // else".
+    let r = scratch("heads-json-only");
+    write(&r, ".adr.yaml", REGISTRY);
+    write(&r, "docs/adr/0001-one.md", NUMBERED);
+
+    let got = run(&r, &["heads", "--json"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(got.out.starts_with('{'), "{}", got.out);
+    assert!(!got.out.contains("# Architecture"), "{}", got.out);
+    assert!(got.out.contains(r#""choice":"One""#), "{}", got.out);
+    assert!(got.err.is_empty(), "stderr: {}", got.err);
+}
+
+// --- history's failure paths ------------------------------------------------
+
+#[test]
+fn history_json_answers_an_unknown_key_instead_of_staying_silent() {
+    // Both rejections printed to stderr and returned 7 with nothing on stdout,
+    // so `--json` gave a machine caller an exit code and silence — against
+    // section 12's "writes the result object to stdout and nothing else".
+    let r = scratch("history-unknown");
+    write(&r, ".adr.yaml", REGISTRY);
+    write(&r, "docs/adr/0001-one.md", NUMBERED);
+
+    let got = run(&r, &["history", "a.d", "--json"]);
+    assert_eq!(got.code, 7, "{}{}", got.out, got.err);
+    assert!(got.out.contains(r#""state":"unknown""#), "{}", got.out);
+    assert!(got.out.contains(r#""unknown":"key""#), "{}", got.out);
+    // Advisory, as everywhere else: named, never substituted.
+    assert!(got.out.contains(r#""suggestion":"a.b""#), "{}", got.out);
+
+    let scope = run(&r, &["history", "a.b", "--scope", "nope", "--json"]);
+    assert_eq!(scope.code, 7, "{}{}", scope.out, scope.err);
+    assert!(scope.out.contains(r#""unknown":"scope""#), "{}", scope.out);
+}

@@ -2,6 +2,82 @@
 
 ## Unreleased
 
+## v0.6.0
+
+### Added
+
+- **`aval mcp` — the corpus as MCP tools.** Five read-only tools over
+  newline-delimited JSON-RPC on stdio: `aval_resolve`, `aval_keys`,
+  `aval_heads`, `aval_show`, `aval_history`. Register it with
+
+  ```
+  claude mcp add aval -- aval mcp
+  ```
+
+  An agent could already run `aval resolve`; the session hook prints the
+  commands. What this adds is **discoverable** access — tools a client
+  lists without being told they exist, arguments checked as a schema
+  rather than assembled into a command line, results as data rather than
+  parsed back out of stdout, and descriptions that put the caller's
+  obligations in front of the model at the moment it calls. "A suggestion
+  is advisory" and "a contradiction means stop" are enforced on the shell
+  by a caller that already knows them; here they are where a caller reads
+  them.
+
+  **Every verdict is `isError: false`, contradiction included.** MCP gives
+  a tool result one error flag, and raising it on a non-zero exit code
+  would report *stop, do not pick one* as a malfunction — teaching a
+  caller to retry the one verdict where routing around it is the specific
+  harm the corpus exists to prevent. `isError` means no question was
+  answered: a corpus that will not load, or a name it does not carry.
+
+  The corpus is reread on every call, because an agent edits records in
+  the same session it asks questions in. Startup reads nothing, so a
+  registry mid-edit does not take the surface away. Nothing writes.
+
+- **`aval keys` — the decision vocabulary.** Every key, its description,
+  the scopes it is answerable at and where it is already decided. Nothing
+  could enumerate keys before, and §12.1 rules out finding one by
+  similarity, so a caller had to already know the name it was looking for.
+
+  Direct occupancy only: "decided at this scope" and "answers at this
+  scope" are different questions, and merging them would rebuild the
+  fallback ambiguity §5 exists to prevent. A key declaring no scopes
+  (`null`, every declared scope) stays distinct from one declaring an
+  empty list (fleet-wide only).
+
+### Upgrading
+
+- **A repository that publishes `aval.pack` must regenerate it.** The pack
+  records the version that wrote it, so every release makes a published
+  pack stale and `aval check` reports `pack-fresh` until `aval pack
+  --write` runs. This is not new in 0.6.0 — any version bump does it — but
+  it is the step to take alongside the upgrade, in the producing repository
+  only. Consumers vendor the file and regenerate nothing.
+
+### Fixed
+
+- **The JSON reader accepted invalid JSON.** It ended in a catch-all that
+  mapped an unknown escape to itself and pushed any character at all, so
+  `"\q"` read as `q` and a raw control character passed silently. It also
+  decoded each `\u` alone, which rejects the *valid* surrogate pair JSON
+  uses to spell an astral code point. Integers now keep their exact value,
+  so a JSON-RPC id past 2^53 survives the round trip that MCP requires.
+
+  Existing `--json` payloads are unchanged — 47 across the six conformance
+  corpora compare byte-identical, exit codes included.
+
+- **`heads` and `history` ignored `--json`.** Bare `aval heads` printed the
+  markdown table instead of a result object, and `aval history` printed
+  both of its rejections to stderr and returned 7 with nothing at all on
+  stdout. §12 says `--json` writes the result object and nothing else.
+
+  `heads --json` reports every **occupied** slot, deliberately a superset
+  of `HEADS.md`: the projection keeps only single-head slots, so a
+  contradicted corpus renders as "Active: None" — empty rather than
+  conflicted. That is fine in a document a person reads beside the corpus
+  and wrong as an answer to a caller.
+
 ## v0.5.0
 
 Vendoring, so a decision made once can be read from the repositories it
@@ -318,8 +394,14 @@ that before the README if you intend to write ADRs against this.
 **Known limits of this release.** There is no cross-corpus resolution: one
 registry, one directory, no shared vocabulary between repositories. The
 frontmatter dialect is a defined subset of YAML rather than all of it, and
-anything outside it is rejected with a line number rather than guessed at. The
-MCP server is specified but unbuilt.
+anything outside it is rejected with a line number rather than guessed at. There
+is no tool surface: an agent reaches the corpus by running the CLI.
+
+*(Both limits were later retired — cross-corpus resolution by packs in v0.5.0,
+the tool surface by `aval mcp` in v0.6.0. This paragraph said "the MCP server is
+specified but unbuilt" until v0.6.0, which was wrong on the first word: no
+specification existed anywhere, only three tool names in a plan that had already
+been rewritten without them.)*
 
 Sections below record how it was built, and are kept because each names a
 mistake worth not repeating.

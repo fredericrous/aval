@@ -79,6 +79,28 @@ Repo-specific caveats go in `.claude/aval-hook.local.md`. The hook appends that
 file; installing again never touches it. `--check` is the drift detector for
 CI: exit 0 wired, exit 1 stale.
 
+The hook pushes; **`aval mcp` lets an agent pull** — the same answers as native
+tools, asked at the moment the question comes up rather than only at the top of
+a session:
+
+```console
+$ claude mcp add aval -- aval mcp
+```
+
+Five read-only tools: `aval_resolve`, `aval_keys`, `aval_heads`, `aval_show`,
+`aval_history`. They resolve through the same graph the CLI does and return the
+same bytes `--json` would, so the two surfaces cannot drift apart.
+
+The distinction that matters: **a verdict is not an error**. `undecided`,
+`retired`, `unknown` and `contradiction` all come back as ordinary results with
+`isError: false`, because each is an answer. Reporting `contradiction` as a tool
+failure would teach an agent to retry or work around the one verdict that means
+*stop and ask a human* — so the flag is reserved for a corpus that would not
+load, or a name it does not carry.
+
+Nothing on that surface writes. Resolving answers a question; deciding is not
+something to do on an agent's behalf.
+
 Codes `1`, `2` and `3` mean the tool failed, was misused, or could not read the
 corpus. They never overlap a verdict, so "I could not look" is never mistaken
 for "I looked and found nothing".
@@ -141,13 +163,12 @@ Nothing in a pack is ever executed, so there is no trust prompt to match
 
 ## Status
 
-Pre-alpha, and not yet published. The resolver, the invariants, the projection
-and the CLI work; the corpus it was built against is a fixture, not a
-production one. [`SEMANTICS.md`](SEMANTICS.md) is normative and is the place to
-start.
+Published, and in use: the resolver, the invariants, the projection, the CLI,
+vendoring and the tool surface all work, against real corpora rather than
+fixtures. [`SEMANTICS.md`](SEMANTICS.md) is normative and is the place to
+start if you intend to write records against this.
 
-Still to come: converting a real corpus, the git-hook gate, the agent surfaces,
-and a 1.0.
+Still to come: a 1.0.
 
 ## Install
 

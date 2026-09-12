@@ -5,7 +5,7 @@
 //! section 14. The rule that shapes all of them is that a code meaning "I could
 //! not reach a verdict" never shares a range with a verdict.
 
-use aval::{add, heads, hook, links, load, migrate, packfile, provenance, render, status};
+use aval::{add, heads, hook, links, load, migrate, packfile, render, status};
 
 use aval_core::graph::Verdict;
 use aval_core::json::Json;
@@ -21,6 +21,8 @@ aval — the current architecture decision, as a typed answer
 
 USAGE
     aval resolve <key> [--scope <scope>]   what is decided, and nothing else
+    aval keys                              the vocabulary: every key, where it
+                                           is answerable, where it is decided
     aval check                             every invariant; the gate runs this
     aval heads [--write | --check]         the projection
     aval show <ADR-NNNN>                   derived status of one document
@@ -30,6 +32,8 @@ USAGE
     aval pack [--write | --check]          this corpus's declarations, for others to read
     aval add <source>… [--dry-run]         vendor another repository's declarations
     aval add --check                       are the vendored packs still current
+    aval mcp                               serve the corpus as MCP tools on
+                                           stdio, read-only, until stdin closes
 
 SOURCES
     github:owner/repo   forgejo:host/owner/repo   <git-url>   <path>
@@ -46,6 +50,8 @@ EXIT
     resolve  0 active · 4 undecided · 5 contradiction · 6 retired · 7 unknown
     others   0 ok · 1 findings or stale
     always   1 tool failure · 2 usage · 3 unreadable or invalid corpus
+    mcp      0 stdin closed · 1 transport failure · 2 usage. Never 3: a
+             corpus that will not load is reported in the tool result.
 ";
 
 /// Failures, disjoint from every verdict.
@@ -166,18 +172,7 @@ fn loaded(args: &Args) -> Result<Loaded, i32> {
 
 fn emit_error(args: &Args, exit: i32, message: &str, findings: Vec<Finding>) {
     if args.json {
-        let j = Json::obj()
-            .set("ok", false)
-            .set("exit", exit)
-            .set("error", message)
-            .set(
-                "findings",
-                findings
-                    .iter()
-                    .map(render::finding_json)
-                    .collect::<Vec<_>>(),
-            );
-        println!("{}", j);
+        println!("{}", render::error_json(exit, message, &findings));
     } else {
         eprintln!("aval: {}", message);
         for f in &findings {
@@ -189,6 +184,8 @@ fn emit_error(args: &Args, exit: i32, message: &str, findings: Vec<Finding>) {
 fn run(args: Args) -> i32 {
     match args.command.as_str() {
         "resolve" => cmd_resolve(&args),
+        "keys" => cmd_keys(&args),
+        "mcp" => cmd_mcp(&args),
         "check" => cmd_check(&args),
         "heads" => cmd_heads(&args),
         "show" => cmd_show(&args),
@@ -232,67 +229,49 @@ fn cmd_resolve(args: &Args) -> i32 {
         .scope
         .clone()
         .unwrap_or_else(|| DEFAULT_SCOPE.to_string());
-    let verdict = l.graph.resolve(&key, &scope);
-    let slot = Slot {
-        key: &key,
-        scope: &scope,
-    };
-    // Competing heads are the one verdict where "which commit did this" is
-    // load-bearing, because parallel worktrees make them routine. Enrichment
-    // only; a repository with no history still gets exit 5.
-    let prov = match &verdict {
-        Verdict::Contradiction {
-            heads,
-            matched_scope,
-        } => heads
-            .iter()
-            .map(|id| {
-                let at = Slot {
-                    key: &key,
-                    scope: matched_scope,
-                };
-                let found = l
-                    .graph
-                    .heads(at)
-                    .into_iter()
-                    .find(|(a, _)| &a.id == id)
-                    .map(|(a, e)| (a.file.clone(), e.line));
-                match found {
-                    Some((file, line)) => (
-                        id.clone(),
-                        provenance::for_line(&l.root, &l.root.join(file), line),
-                    ),
-                    None => (id.clone(), provenance::Provenance::Unavailable),
-                }
-            })
-            .collect(),
-        _ => Vec::new(),
-    };
-    // Which pack the answer came from, when it came from one. A consumer has
-    // to be able to tell a decision it can change from one it cannot, and
-    // reading the id prefix works only for somebody who already knows the
-    // convention.
-    let from_pack = verdict
-        .adr()
-        .and_then(|id| l.graph.corpus().adr(id))
-        .and_then(|a| a.pack.clone());
-
+    let a = render::answer(&l.graph, &l.root, &key, &scope);
     if args.json {
-        println!(
-            "{}",
-            render::verdict_json(&verdict, slot, &prov).set_opt("pack", from_pack)
-        );
+        println!("{}", a.json());
     } else {
-        print!("{}", render::verdict_text(&verdict, slot, &prov));
-        if let Some(p) = &from_pack {
-            println!(
-                "  vendored: from the `{}` pack; change it there, not here",
-                p
-            );
-        }
+        print!("{}", a.text());
         let _ = std::io::stdout().flush();
     }
-    verdict.exit()
+    a.exit()
+}
+
+/// The decision vocabulary.
+///
+/// Discovery, not authority. §12.1 rules out finding a decision by similarity,
+/// so asking about a key means knowing its exact name — and until this verb
+/// there was no way to learn one from the tool itself.
+fn cmd_keys(args: &Args) -> i32 {
+    if !args.positional.is_empty() {
+        eprintln!("aval: `keys` takes no arguments");
+        return E_USAGE;
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    if args.json {
+        println!("{}", render::keys_json(&l.graph, &l.packs));
+    } else {
+        print!("{}", render::keys_text(&l.graph, &l.packs));
+        let _ = std::io::stdout().flush();
+    }
+    0
+}
+
+/// Serve the corpus as MCP tools on stdio.
+///
+/// Reads no corpus here: a registry mid-edit must not take the surface away,
+/// and each call loads the working tree fresh anyway.
+fn cmd_mcp(args: &Args) -> i32 {
+    if !args.positional.is_empty() {
+        eprintln!("aval: `mcp` takes no arguments");
+        return E_USAGE;
+    }
+    aval::mcp::serve(&args.dir)
 }
 
 fn cmd_check(args: &Args) -> i32 {
@@ -437,6 +416,12 @@ fn cmd_heads(args: &Args) -> i32 {
             heads_json_or_text(args, "stale", &path, &f);
             E_FAIL
         }
+    } else if args.json {
+        // Section 12: `--json` writes the result object and nothing else. Bare
+        // `heads` used to ignore the flag and print the markdown table, so a
+        // machine caller asking for JSON silently got a document instead.
+        println!("{}", render::heads_json(&l.graph));
+        0
     } else {
         print!("{}", text);
         0
@@ -851,11 +836,7 @@ fn cmd_show(args: &Args) -> i32 {
         if args.json {
             println!(
                 "{}",
-                Json::obj()
-                    .set("state", "unknown")
-                    .set("exit", 7)
-                    .set("adr", id.as_str())
-                    .set_opt("suggestion", sug)
+                render::show_unknown_json(&id, sug.map(|s| s.to_string()))
             );
         } else {
             eprintln!("aval: no such ADR `{}`", id);
@@ -886,12 +867,47 @@ fn cmd_history(args: &Args) -> i32 {
         .scope
         .clone()
         .unwrap_or_else(|| DEFAULT_SCOPE.to_string());
+    // Both rejections used to print to stderr and return 7 with nothing on
+    // stdout, so `history --json` answered a machine caller with silence.
     if !l.graph.registry().has_key(&key) {
-        eprintln!("aval: `{}` is not a registered decision key", key);
+        let names: Vec<&str> = l
+            .graph
+            .registry()
+            .keys
+            .iter()
+            .map(|k| k.name.as_str())
+            .collect();
+        let sug = aval_core::model::suggest(&key, names).map(|s| s.to_string());
+        if args.json {
+            println!("{}", render::history_unknown_json("key", &key, &scope, sug));
+        } else {
+            eprintln!("aval: `{}` is not a registered decision key", key);
+            if let Some(g) = &sug {
+                eprintln!("  did you mean `{}`? A suggestion is advisory.", g);
+            }
+        }
         return 7;
     }
     if !l.graph.registry().has_scope(&scope) {
-        eprintln!("aval: `{}` is not a declared scope", scope);
+        let names: Vec<&str> = l
+            .graph
+            .registry()
+            .scopes
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        let sug = aval_core::model::suggest(&scope, names).map(|s| s.to_string());
+        if args.json {
+            println!(
+                "{}",
+                render::history_unknown_json("scope", &key, &scope, sug)
+            );
+        } else {
+            eprintln!("aval: `{}` is not a declared scope", scope);
+            if let Some(g) = &sug {
+                eprintln!("  did you mean `{}`? A suggestion is advisory.", g);
+            }
+        }
         return 7;
     }
     let slot = Slot {
