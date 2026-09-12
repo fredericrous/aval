@@ -260,7 +260,7 @@ pub fn load(from: &Path) -> Result<Loaded, LoadError> {
         adrs.extend(p.adrs.iter().cloned());
     }
 
-    let corpus = Corpus { registry, adrs };
+    let corpus = Corpus::new(registry, adrs);
     let graph = Graph::build(corpus).map_err(LoadError::Invalid)?;
     Ok(Loaded {
         graph,

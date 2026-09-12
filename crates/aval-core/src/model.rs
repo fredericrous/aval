@@ -133,6 +133,7 @@ pub enum Lineage {
 
 /// One decision one ADR makes: SEMANTICS section 1.4.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Entry {
     pub key: String,
     pub scope: String,
@@ -195,6 +196,7 @@ impl fmt::Display for Slot<'_> {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Adr {
     pub id: AdrId,
     pub status: Status,
@@ -231,6 +233,7 @@ impl Adr {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct KeyDef {
     pub name: String,
     pub description: Option<String>,
@@ -255,6 +258,7 @@ impl KeyDef {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Registry {
     /// Where numbered ADR files live, relative to the registry. Also where
     /// `HEADS.md` is written. Empty when the corpus has no records of its own,
@@ -272,6 +276,21 @@ pub struct Registry {
 }
 
 impl Registry {
+    /// A registry with nothing declared but its directory.
+    ///
+    /// The struct is `#[non_exhaustive]`, so this is how a caller outside the
+    /// crate starts one. The fields stay public and writable, so it is a
+    /// starting point rather than a builder nobody asked for.
+    pub fn empty(dir: impl Into<String>) -> Registry {
+        Registry {
+            dir: dir.into(),
+            sources: Vec::new(),
+            packs: Vec::new(),
+            scopes: Vec::new(),
+            keys: Vec::new(),
+        }
+    }
+
     /// Whether this corpus keeps records of its own. A registry that only
     /// vendors has nowhere to put `HEADS.md` and nothing to scan for numbered
     /// files, and both callers must ask rather than joining an empty string
@@ -322,6 +341,7 @@ impl Layer {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Finding {
     pub layer: Layer,
     /// The check id, as listed in SEMANTICS section 10.
@@ -367,12 +387,17 @@ impl fmt::Display for Finding {
 
 /// A parsed corpus that has not yet been validated as a graph.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Corpus {
     pub registry: Registry,
     pub adrs: Vec<Adr>,
 }
 
 impl Corpus {
+    pub fn new(registry: Registry, adrs: Vec<Adr>) -> Corpus {
+        Corpus { registry, adrs }
+    }
+
     pub fn adr(&self, id: impl AsRef<str>) -> Option<&Adr> {
         let id = id.as_ref();
         self.adrs.iter().find(|a| a.id.as_str() == id)

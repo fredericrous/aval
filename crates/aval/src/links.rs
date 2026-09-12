@@ -582,16 +582,10 @@ mod base_tests {
     fn loaded_at(root: &str) -> Loaded {
         // Only `root` is read by the functions under test.
         Loaded {
-            graph: aval_core::graph::Graph::build(aval_core::model::Corpus {
-                registry: aval_core::model::Registry {
-                    dir: "docs/adr".into(),
-                    sources: Vec::new(),
-                    packs: Vec::new(),
-                    scopes: Vec::new(),
-                    keys: Vec::new(),
-                },
-                adrs: Vec::new(),
-            })
+            graph: aval_core::graph::Graph::build(aval_core::model::Corpus::new(
+                aval_core::model::Registry::empty("docs/adr"),
+                Vec::new(),
+            ))
             .expect("empty corpus"),
             root: PathBuf::from(root),
             adr_dir: PathBuf::from(root).join("docs/adr"),

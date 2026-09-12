@@ -33,10 +33,7 @@ fn corpus(docs: &[(&str, &str)]) -> Result<Graph, Vec<Finding>> {
                 .unwrap_or_else(|f| panic!("{}: {:?}", name, f)),
         );
     }
-    Graph::build(Corpus {
-        registry: registry(),
-        adrs,
-    })
+    Graph::build(Corpus::new(registry(), adrs))
 }
 
 fn checks(f: &[Finding]) -> Vec<&str> {
@@ -361,10 +358,10 @@ fn scoped_corpus(docs: &[(&str, &str)]) -> Result<Graph, Vec<Finding>> {
                 .unwrap_or_else(|f| panic!("{}: {:?}", name, f)),
         );
     }
-    Graph::build(Corpus {
-        registry: parse::registry(".adr.yaml", REG_SCOPED).expect("registry parses"),
+    Graph::build(Corpus::new(
+        parse::registry(".adr.yaml", REG_SCOPED).expect("registry parses"),
         adrs,
-    })
+    ))
 }
 
 #[test]

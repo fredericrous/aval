@@ -55,6 +55,7 @@ pub enum Verdict {
 /// is unreachable against a corpus that loaded. That is the argument for
 /// keeping it out of the success type rather than for trusting callers.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Inconsistent {
     pub message: String,
 }
