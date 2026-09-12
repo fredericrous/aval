@@ -438,7 +438,10 @@ fn record(
             // `first` and `replaces` together and carried the contradiction
             // into the graph; the sum type has nowhere to put it, so it is
             // refused with the rest of the pack.
-            if first == !replaces.is_empty() {
+            // Same shape as `parse`'s check, and named for the same reason:
+            // the two agree only when the entry declared both or neither.
+            let has_predecessor = !replaces.is_empty();
+            if first == has_predecessor {
                 out.push(
                     a(
                         "pack-readable",
