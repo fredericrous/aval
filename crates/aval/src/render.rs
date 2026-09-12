@@ -7,6 +7,7 @@ use crate::provenance::{self, Provenance};
 use aval_core::graph::{DerivedStatus, Graph, Unknown, Verdict};
 use aval_core::json::Json;
 use aval_core::model::{Adr, Finding, Slot};
+use aval_core::pack::Pack;
 use std::path::Path;
 
 /// A resolved answer, with everything either rendering needs.
@@ -265,6 +266,138 @@ pub fn verdict_text(v: &Verdict, slot: Slot<'_>, prov: &[(String, Provenance)]) 
 
 fn status_word(d: DerivedStatus) -> &'static str {
     d.as_str()
+}
+
+// ------------------------------------------------------------------ keys
+//
+// The decision vocabulary. This is DISCOVERY, not authority: §12.1 rules out
+// finding a decision by similarity, so the way to ask about a key is to know
+// its exact name, and until now nothing could list them.
+
+/// What occupies a slot, for one key.
+///
+/// Deliberately **direct occupancy only** — inheritance is not folded in.
+/// "Decided at this scope" and "answers at this scope" are different questions,
+/// and merging them rebuilds the fallback ambiguity §5 exists to prevent. The
+/// caller that wants the effective answer resolves.
+fn decided_at<'a>(g: &'a Graph, key: &str) -> Vec<(&'a str, &'static str, Vec<String>)> {
+    let mut out = Vec::new();
+    for slot in g.corpus().slots() {
+        if slot.key != key {
+            continue;
+        }
+        let heads = g.heads(slot);
+        let state = match heads.len() {
+            0 => continue,
+            1 if heads[0].1.is_retire() => "retired",
+            1 => "active",
+            _ => "contradiction",
+        };
+        // A list even when there is one, because a contradiction has several
+        // and a caller must not have to split a joined string to find them.
+        out.push((
+            slot.scope,
+            state,
+            heads.iter().map(|(a, _)| a.id.clone()).collect(),
+        ));
+    }
+    out
+}
+
+/// Which pack declares `key`, if one does.
+///
+/// `KeyDef` carries no origin — `merge_declarations` folds pack keys into the
+/// registry — but the parsed packs are kept, so the answer is right here rather
+/// than needing a field in the model that two places would have to agree on.
+fn key_pack<'a>(packs: &'a [Pack], key: &str) -> Option<&'a str> {
+    packs
+        .iter()
+        .find(|p| p.keys.iter().any(|k| k.name == key))
+        .map(|p| p.name.as_str())
+}
+
+pub fn keys_json(g: &Graph, packs: &[Pack]) -> Json {
+    let reg = g.registry();
+    let keys: Vec<Json> = reg
+        .keys
+        .iter()
+        .map(|k| {
+            let decided: Vec<Json> = decided_at(g, &k.name)
+                .into_iter()
+                .map(|(scope, state, adrs)| {
+                    Json::obj()
+                        .set("scope", scope)
+                        .set("state", state)
+                        .set("adrs", adrs)
+                })
+                .collect();
+            Json::obj()
+                .set("key", k.name.as_str())
+                .set_opt("description", k.description.clone())
+                // `null` and `[]` are different and both are meaning-bearing:
+                // null admits every declared scope, [] admits only the default
+                // one. Neither may collapse into the other, or into absence.
+                .set(
+                    "scopes",
+                    match &k.scopes {
+                        None => Json::Null,
+                        Some(list) => {
+                            Json::Arr(list.iter().map(|s| Json::from(s.as_str())).collect())
+                        }
+                    },
+                )
+                .set_opt("pack", key_pack(packs, &k.name).map(|s| s.to_string()))
+                .set("decided", decided)
+        })
+        .collect();
+    Json::obj()
+        .set(
+            "scopes",
+            reg.scopes.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        )
+        .set("keys", keys)
+}
+
+pub fn keys_text(g: &Graph, packs: &[Pack]) -> String {
+    let reg = g.registry();
+    let mut s = String::new();
+    s.push_str(&format!(
+        "{} keys · scopes: {}\n",
+        reg.keys.len(),
+        if reg.scopes.is_empty() {
+            "none declared".to_string()
+        } else {
+            reg.scopes.join(", ")
+        }
+    ));
+    for k in &reg.keys {
+        s.push('\n');
+        match &k.description {
+            Some(d) => s.push_str(&format!("{}   {}\n", k.name, d)),
+            None => s.push_str(&format!("{}\n", k.name)),
+        }
+        let where_ = match &k.scopes {
+            None => "every declared scope".to_string(),
+            Some(l) if l.is_empty() => "the default scope only".to_string(),
+            Some(l) => l.join(", "),
+        };
+        match key_pack(packs, &k.name) {
+            Some(p) => s.push_str(&format!(
+                "  answerable at {}   ·   declared by the `{}` pack\n",
+                where_, p
+            )),
+            None => s.push_str(&format!("  answerable at {}\n", where_)),
+        }
+        for (scope, state, adrs) in decided_at(g, &k.name) {
+            s.push_str(&format!(
+                "  {:<14} {}   {}\n",
+                state,
+                scope,
+                adrs.join(", ")
+            ));
+        }
+    }
+    s
 }
 
 pub fn show_json(g: &Graph, adr: &Adr) -> Json {

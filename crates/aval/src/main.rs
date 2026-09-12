@@ -21,6 +21,8 @@ aval — the current architecture decision, as a typed answer
 
 USAGE
     aval resolve <key> [--scope <scope>]   what is decided, and nothing else
+    aval keys                              the vocabulary: every key, where it
+                                           is answerable, where it is decided
     aval check                             every invariant; the gate runs this
     aval heads [--write | --check]         the projection
     aval show <ADR-NNNN>                   derived status of one document
@@ -189,6 +191,7 @@ fn emit_error(args: &Args, exit: i32, message: &str, findings: Vec<Finding>) {
 fn run(args: Args) -> i32 {
     match args.command.as_str() {
         "resolve" => cmd_resolve(&args),
+        "keys" => cmd_keys(&args),
         "check" => cmd_check(&args),
         "heads" => cmd_heads(&args),
         "show" => cmd_show(&args),
@@ -240,6 +243,29 @@ fn cmd_resolve(args: &Args) -> i32 {
         let _ = std::io::stdout().flush();
     }
     a.exit()
+}
+
+/// The decision vocabulary.
+///
+/// Discovery, not authority. §12.1 rules out finding a decision by similarity,
+/// so asking about a key means knowing its exact name — and until this verb
+/// there was no way to learn one from the tool itself.
+fn cmd_keys(args: &Args) -> i32 {
+    if !args.positional.is_empty() {
+        eprintln!("aval: `keys` takes no arguments");
+        return E_USAGE;
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    if args.json {
+        println!("{}", render::keys_json(&l.graph, &l.packs));
+    } else {
+        print!("{}", render::keys_text(&l.graph, &l.packs));
+        let _ = std::io::stdout().flush();
+    }
+    0
 }
 
 fn cmd_check(args: &Args) -> i32 {

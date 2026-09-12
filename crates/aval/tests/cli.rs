@@ -333,3 +333,96 @@ fn heads_speaks_json_on_stdout() {
     let got = run(&r, &["heads", "--write", "--json"]);
     assert!(got.out.contains("\"state\":\"unchanged\""), "{}", got.out);
 }
+
+// --- keys ------------------------------------------------------------------
+//
+// Discovery, and the distinctions it must not flatten.
+
+#[test]
+fn keys_lists_the_vocabulary_and_where_each_is_decided() {
+    let r = scratch("keys-basic");
+    write(&r, ".adr.yaml", REGISTRY);
+    write(&r, "docs/adr/0001-one.md", NUMBERED);
+
+    let got = run(&r, &["keys"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(got.out.contains("a.b"), "{}", got.out);
+    assert!(got.out.contains("c.d"), "{}", got.out);
+    // a.b is decided; c.d is declared and undecided, and must still be listed —
+    // a key nothing has answered is exactly what a caller needs to discover.
+    assert!(got.out.contains("active"), "{}", got.out);
+}
+
+#[test]
+fn keys_distinguishes_an_absent_scope_list_from_an_empty_one() {
+    // `null` admits every declared scope; `[]` admits only the default one.
+    // Collapsing either into the other silently changes which questions the
+    // registry says are answerable.
+    let r = scratch("keys-scopes");
+    write(
+        &r,
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [cloud]\nkeys:\n  \
+         open.key:\n  fleet.key:\n    scopes: []\n  narrow.key:\n    scopes: [cloud]\n",
+    );
+    let got = run(&r, &["keys", "--json"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(
+        got.out.contains(r#""key":"open.key","scopes":null"#),
+        "{}",
+        got.out
+    );
+    assert!(
+        got.out.contains(r#""key":"fleet.key","scopes":[]"#),
+        "{}",
+        got.out
+    );
+    assert!(
+        got.out.contains(r#""key":"narrow.key","scopes":["cloud"]"#),
+        "{}",
+        got.out
+    );
+}
+
+#[test]
+fn keys_reports_competing_heads_as_a_list() {
+    // A contradiction has several records. Joining them into one string would
+    // make a caller split it back out, and `adrs` is where they belong.
+    let r = scratch("keys-contradiction");
+    write(
+        &r,
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: []\nkeys:\n  a.b:\n",
+    );
+    write(
+        &r,
+        "docs/adr/0001-one.md",
+        "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  \
+         - key: a.b\n    choice: One\n    first: true\n---\n# one\n",
+    );
+    write(
+        &r,
+        "docs/adr/0002-two.md",
+        "---\nid: ADR-0002\nstatus: accepted\ndecisions:\n  \
+         - key: a.b\n    choice: Two\n    first: true\n---\n# two\n",
+    );
+    let got = run(&r, &["keys", "--json"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(
+        got.out.contains(r#""state":"contradiction""#),
+        "{}",
+        got.out
+    );
+    assert!(
+        got.out.contains(r#""adrs":["ADR-0001","ADR-0002"]"#),
+        "{}",
+        got.out
+    );
+}
+
+#[test]
+fn keys_takes_no_arguments() {
+    let r = scratch("keys-usage");
+    write(&r, ".adr.yaml", REGISTRY);
+    assert_eq!(run(&r, &["keys", "a.b"]).code, 2);
+}
