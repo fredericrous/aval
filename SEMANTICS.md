@@ -1,6 +1,6 @@
 # `aval` — normative semantics
 
-Version 0.8.0. This document is the specification. Where an
+Version 1.0.0. This document is the specification. Where an
 implementation and this document disagree, this document is right and the
 implementation is a bug.
 
@@ -1002,6 +1002,29 @@ This document is versioned with the tool.
 - Clarifying wording without changing behaviour is **patch**.
 
 A change to the conformance fixtures is the signal that behaviour moved.
+
+**From 1.0 those words mean what semver says they mean.** Before it, a breaking
+change shipped as a minor bump, which is the 0.x convention — and is why §3.7's
+printable-value rule, which is breaking, is what made this release 1.0 rather
+than another 0.x. From 1.0,
+a change in the first list above is a new MAJOR version, and a caller may pin
+`1` and expect the rest of this document to hold.
+
+What that pins, precisely:
+
+- the verdict set, their tokens and their exit codes (§14), and the per-command
+  exit contracts beside them;
+- the note strings, which are asserted by fixtures and are what a caller reads
+  when it reports a non-answer;
+- the field names of every `--json` payload, and the rule that `--json` writes
+  the result object and nothing else (§12);
+- the frontmatter dialect (§3) — what a record is allowed to say;
+- the tool surface's mapping of verdicts to `isError` (§14.1);
+- `aval-core`'s API to the extent §15.1 describes.
+
+What it does not pin: the human text renderings beyond the machine token each
+one leads with, the wording of findings, and anything this document calls
+advisory.
 
 ### 15.1 The library is versioned too
 

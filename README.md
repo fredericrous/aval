@@ -173,7 +173,9 @@ vendoring and the tool surface all work, against real corpora rather than
 fixtures. [`SEMANTICS.md`](SEMANTICS.md) is normative and is the place to
 start if you intend to write records against this.
 
-Still to come: a 1.0.
+**1.0.** The verdicts, their exit codes, the note strings, the `--json` field
+names and the frontmatter dialect are stable; §15 of [`SEMANTICS.md`](SEMANTICS.md)
+says exactly what that covers, and what it deliberately does not.
 
 ## Install
 
