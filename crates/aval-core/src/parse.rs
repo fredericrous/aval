@@ -83,6 +83,34 @@ fn want_line(node: &Node, key: &str, file: &str, out: &mut Vec<Finding>) -> Opti
         // as though it declared neither `choice` nor `retire`, and report a
         // second error about a field the author did write.
     }
+    // This value is printed into an agent's context — by the session-start
+    // hook and by `aval mcp` — so a control character in it is not a display
+    // nuisance. A C1 escape or a bidi override can make the text a reader
+    // reviews differ from the text a model receives, and a decision record is
+    // reviewed by reading it.
+    //
+    // Deliberately NOT an attempt to detect instruction-shaped prose. A regex
+    // for "ignore previous instructions" is an arms race that fails open, and
+    // a false positive on a legitimate choice is worse than the gap it closes.
+    // Section 2.3 says where that risk is actually handled.
+    if let Some(c) = v.chars().find(|c| {
+        (c.is_control() && *c != '\n')
+            || ('\u{202A}'..='\u{202E}').contains(c)
+            || ('\u{2066}'..='\u{2069}').contains(c)
+    }) {
+        out.push(
+            a(
+                "frontmatter-parses",
+                format!(
+                    "`{}` carries U+{:04X}, which is not printable text; this \
+                     value is read by people and by agents and must look the \
+                     same to both",
+                    key, c as u32
+                ),
+            )
+            .at(file, node.get(key).map_or(node.line, |n| n.line)),
+        );
+    }
     Some(v)
 }
 

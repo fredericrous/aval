@@ -161,6 +161,11 @@ a disagreement with the fleet's answer at the fleet's scope.
 Nothing in a pack is ever executed, so there is no trust prompt to match
 `amont trust`. The review gate is the pull request that adds the file.
 
+That "inert" scopes to execution. A pack's text does reach an agent's context,
+so the hook and the MCP tools both say that a record's wording is data rather
+than instruction, and a value carrying a control character or a bidi override
+is refused — the reviewer and the model must see the same bytes.
+
 ## Status
 
 Published, and in use: the resolver, the invariants, the projection, the CLI,

@@ -21,8 +21,9 @@ aval — the current architecture decision, as a typed answer
 
 USAGE
     aval resolve <key> [--scope <scope>]   what is decided, and nothing else
-    aval keys                              the vocabulary: every key, where it
-                                           is answerable, where it is decided
+    aval keys [--names]                    the vocabulary: every key, where it
+                                           is answerable, where it is decided;
+                                           --names omits where it is decided
     aval check                             every invariant; the gate runs this
     aval heads [--write | --check]         the projection
     aval show <ADR-NNNN>                   derived status of one document
@@ -65,6 +66,7 @@ struct Args {
     scope: Option<String>,
     as_name: Option<String>,
     json: bool,
+    names: bool,
     write: bool,
     check: bool,
     dry_run: bool,
@@ -78,6 +80,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         scope: None,
         as_name: None,
         json: false,
+        names: false,
         write: false,
         check: false,
         dry_run: false,
@@ -88,6 +91,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         let arg = argv[i].as_str();
         match arg {
             "--json" => a.json = true,
+            "--names" => a.names = true,
             "--write" => a.write = true,
             "--check" => a.check = true,
             "--dry-run" => a.dry_run = true,
@@ -237,7 +241,12 @@ fn cmd_keys(args: &Args) -> i32 {
         Err(c) => return c,
     };
     if args.json {
-        println!("{}", render::keys_json(&l.graph, &l.packs));
+        let detail = if args.names {
+            render::Detail::Names
+        } else {
+            render::Detail::Full
+        };
+        println!("{}", render::keys_json(&l.graph, &l.packs, detail));
     } else {
         print!("{}", render::keys_text(&l.graph, &l.packs));
         let _ = std::io::stdout().flush();

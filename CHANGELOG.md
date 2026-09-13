@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+## v0.8.0
+
+An agent-surface release: what the tools cost to call, and what their text
+is.
+
+### Added
+
+- **`aval://heads` and `aval://keys` as MCP resources.** A resource is
+  context a client attaches once; a tool result is paid for on every
+  call, and the session-start hook already prints the heads. Offering
+  both lets a client pay for one.
+
+- **`aval keys --names`**, and `detail` on the `aval_keys` tool. Both
+  levels have a CLI counterpart deliberately: a tool the CLI cannot
+  answer is a tool that can drift.
+
+### Changed
+
+- **A tool result carries its payload once.** It used to carry the JSON a
+  model reads *and* a human rendering it does not need; on a 58-key
+  corpus that duplicate was 27% of the bytes.
+
+- **`aval_keys` defaults to names.** It is the call a caller makes
+  *because* it does not know a key name, and it was the most expensive
+  thing the server did: 29 KB, of which names were 1 KB and `decided` a
+  third. Measured on that corpus: `aval_keys` **−56%**, `aval_resolve`
+  −16%, `tools/list` −9%.
+
+- **Both surfaces now say a record's wording is DATA**, and that text
+  reading as an instruction should be reported rather than followed. The
+  hook's preamble also names the tools, so a session that already has the
+  heads resolves a key instead of fetching them again.
+
+- **§2.3's reasoning is corrected.** It argued that a pack needs no
+  consent gate because it is inert — true of execution, and not of text
+  that reaches a model's context. "Inert" now scopes to execution, and
+  the section says what actually holds the risk down: the surfaces name
+  the text as data, §3.7 keeps the reviewed bytes and the printed bytes
+  identical, and the pull request is the gate. Detecting
+  instruction-shaped prose is deliberately not attempted — it fails open,
+  and a false positive would block a legitimate decision.
+
+### Breaking
+
+- **A value carrying a control character or a bidi override is now a
+  Layer A error** (§3.7). Per §15 a new check is major even when nothing
+  it can fire on exists today: measured against all six conformance
+  corpora and six real ones, every one stays clean.
+
 ## v0.7.0
 
 Nothing a corpus resolves to changes. Every command's output is
