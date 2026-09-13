@@ -3,6 +3,7 @@
 //! Every verdict prints its machine token first, so a human reading a terminal
 //! and a script reading stdout are looking at the same word.
 
+use crate::load::{self, Corpora, Loaded, Repo};
 use crate::provenance::{self, Provenance};
 use aval_core::graph::{DerivedStatus, Graph, Inconsistent, Unknown, Verdict};
 use aval_core::json::Json;
@@ -599,4 +600,384 @@ pub fn history_text(g: &Graph, slot: Slot<'_>, chain: &[&Adr]) -> String {
     }
     s.push_str("\n  This is history. Only the head is authority.\n");
     s
+}
+
+// ------------------------------------------------------------ per corpus
+//
+// One corpus, one command, every rendering at once. The CLI's single-corpus
+// paths keep their own code — their text goes to stderr on a miss and that is
+// a contract — but `--all-repos` and the MCP server both need the JSON, the
+// text and the exit of one corpus's answer without loading it twice, and this
+// is the one producer of that.
+
+/// Everything one corpus says in answer to one command.
+#[derive(Debug, Clone)]
+pub struct Reply {
+    pub json: Json,
+    pub text: String,
+    pub exit: i32,
+    /// Whether the tool surface reports this as a failure: a corpus that could
+    /// not answer at all, or a name it does not carry. Never a verdict.
+    pub is_error: bool,
+}
+
+pub fn resolve_in(l: &Loaded, key: &str, scope: &str) -> Reply {
+    match answer(&l.graph, &l.root, key, scope) {
+        Ok(a) => Reply {
+            json: a.json(),
+            text: a.text(),
+            exit: a.exit(),
+            is_error: false,
+        },
+        Err(e) => Reply {
+            json: error_json(3, &e.to_string(), &[]),
+            text: format!("aval: {}\n", e),
+            exit: 3,
+            is_error: true,
+        },
+    }
+}
+
+pub fn keys_in(l: &Loaded, detail: Detail) -> Reply {
+    Reply {
+        json: keys_json(&l.graph, &l.packs, detail),
+        text: keys_text(&l.graph, &l.packs),
+        exit: 0,
+        is_error: false,
+    }
+}
+
+pub fn heads_in(l: &Loaded) -> Reply {
+    Reply {
+        json: heads_json(&l.graph),
+        text: aval_core::project::render(&l.graph),
+        exit: 0,
+        is_error: false,
+    }
+}
+
+pub fn show_in(l: &Loaded, id: &str) -> Reply {
+    match l.graph.corpus().adr(id) {
+        Some(adr) => Reply {
+            json: show_json(&l.graph, adr),
+            text: show_text(&l.graph, adr),
+            exit: 0,
+            is_error: false,
+        },
+        None => {
+            let names: Vec<&str> = l
+                .graph
+                .corpus()
+                .adrs
+                .iter()
+                .map(|a| a.id.as_str())
+                .collect();
+            let sug = aval_core::model::suggest(id, names).map(str::to_string);
+            let mut text = format!("aval: no such ADR `{}`\n", id);
+            if let Some(s) = &sug {
+                text.push_str(&format!(
+                    "  did you mean {}? A suggestion is advisory.\n",
+                    s
+                ));
+            }
+            Reply {
+                json: show_unknown_json(id, sug),
+                text,
+                exit: 7,
+                is_error: true,
+            }
+        }
+    }
+}
+
+pub fn history_in(l: &Loaded, key: &str, scope: &str) -> Reply {
+    let reg = l.graph.registry();
+    let unknown = |what: &str, names: Vec<&str>, needle: &str, line: String| {
+        let sug = aval_core::model::suggest(needle, names).map(str::to_string);
+        let mut text = line;
+        if let Some(g) = &sug {
+            text.push_str(&format!(
+                "  did you mean `{}`? A suggestion is advisory.\n",
+                g
+            ));
+        }
+        Reply {
+            json: history_unknown_json(what, key, scope, sug),
+            text,
+            exit: 7,
+            is_error: true,
+        }
+    };
+    if !reg.has_key(key) {
+        return unknown(
+            "key",
+            reg.keys.iter().map(|k| k.name.as_str()).collect(),
+            key,
+            format!("aval: `{}` is not a registered decision key\n", key),
+        );
+    }
+    if !reg.has_scope(scope) {
+        return unknown(
+            "scope",
+            reg.scopes.iter().map(|s| s.as_str()).collect(),
+            scope,
+            format!("aval: `{}` is not a declared scope\n", scope),
+        );
+    }
+    let slot = Slot { key, scope };
+    let chain = l.graph.history(slot);
+    Reply {
+        json: history_json(&l.graph, slot, &chain),
+        text: history_text(&l.graph, slot, &chain),
+        exit: 0,
+        is_error: false,
+    }
+}
+
+// --------------------------------------------------------------- aggregate
+//
+// Several corpora, one command. An aggregate is a REPORT, not a verdict: its
+// exit code borrows `check`'s contract rather than `resolve`'s, and its JSON is
+// a map of each member's own payload, byte-equal to what that corpus answers
+// on its own. The CLI's `--all-repos` and the MCP server's no-`repo` call are
+// the same `Aggregate`; that is what keeps them from drifting.
+
+#[derive(Debug)]
+pub enum Outcome {
+    Answered(Reply),
+    /// The corpus would not load. Its error object stands where its answer
+    /// would; the report does not fail because one member did.
+    Unloadable {
+        json: Json,
+        message: String,
+    },
+}
+
+#[derive(Debug)]
+pub struct Member {
+    pub repo: Repo,
+    pub outcome: Outcome,
+}
+
+#[derive(Debug)]
+pub struct Aggregate {
+    pub members: Vec<Member>,
+    /// Worktrees left out because their parent is itself a member: the same
+    /// corpus would otherwise answer twice. Named, so the omission is visible.
+    pub excluded: Vec<(String, String)>,
+}
+
+/// Load each repository once and ask it the same question.
+///
+/// A linked worktree whose parent is among `repos` is excluded — it is a branch
+/// of a corpus already answering. One whose parent is not is the only
+/// representative of that repository and stays in.
+pub fn across(repos: &[Repo], f: impl Fn(&Loaded, &Repo) -> Reply) -> Aggregate {
+    let mut members = Vec::new();
+    let mut excluded = Vec::new();
+    for r in repos {
+        if let Some(parent) = r.worktree.as_ref().and_then(|w| w.parent.clone()) {
+            excluded.push((r.name.clone(), parent));
+            continue;
+        }
+        let outcome = match load::load(&r.root) {
+            Ok(l) => Outcome::Answered(f(&l, r)),
+            Err(e) => Outcome::Unloadable {
+                json: error_json(3, &e.to_string(), e.findings()),
+                message: e.to_string(),
+            },
+        };
+        members.push(Member {
+            repo: r.clone(),
+            outcome,
+        });
+    }
+    Aggregate { members, excluded }
+}
+
+impl Aggregate {
+    pub fn json(&self) -> Json {
+        let mut repos = Json::obj();
+        for m in &self.members {
+            let j = match &m.outcome {
+                Outcome::Answered(r) => r.json.clone(),
+                Outcome::Unloadable { json, .. } => json.clone(),
+            };
+            repos = repos.set(&m.repo.name, j);
+        }
+        let mut ex = Json::obj();
+        for (name, parent) in &self.excluded {
+            ex = ex.set(name, parent.as_str());
+        }
+        Json::obj()
+            .set("repos", repos)
+            .set("worktrees_excluded", ex)
+    }
+
+    pub fn text(&self) -> String {
+        let mut s = String::new();
+        for (i, m) in self.members.iter().enumerate() {
+            if i > 0 {
+                s.push('\n');
+            }
+            s.push_str(&format!("== {} ==\n", m.repo.name));
+            match &m.outcome {
+                Outcome::Answered(r) => s.push_str(&r.text),
+                Outcome::Unloadable { message, .. } => s.push_str(&format!("aval: {}\n", message)),
+            }
+        }
+        for (name, parent) in &self.excluded {
+            s.push_str(&format!("(excluded {}: a worktree of {})\n", name, parent));
+        }
+        s
+    }
+
+    /// `0` every member loaded and none exited 5 · `1` some member exited 5 or
+    /// did not load · `3` no member loaded. A report has no verdict of its own;
+    /// `contradiction` is the one member state a fleet-wide caller must not
+    /// miss, and a member that could not be read is a finding, not silence.
+    pub fn exit(&self) -> i32 {
+        let loaded = self
+            .members
+            .iter()
+            .filter(|m| matches!(m.outcome, Outcome::Answered(_)))
+            .count();
+        if loaded == 0 {
+            return 3;
+        }
+        let finding = self.members.iter().any(|m| match &m.outcome {
+            Outcome::Answered(r) => r.exit == 5,
+            Outcome::Unloadable { .. } => true,
+        });
+        if finding {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+// ------------------------------------------------------------------- repos
+
+fn repo_json(r: &Repo) -> Json {
+    let worktree = match &r.worktree {
+        None => Json::Null,
+        Some(w) => Json::obj()
+            .set("parent_root", w.parent_root.display().to_string())
+            .set(
+                "parent",
+                match &w.parent {
+                    Some(p) => Json::from(p.as_str()),
+                    None => Json::Null,
+                },
+            ),
+    };
+    Json::obj()
+        .set("name", r.name.as_str())
+        .set("root", r.root.display().to_string())
+        .set("worktree", worktree)
+        .set("shadowed", r.shadowed)
+}
+
+/// What discovery saw, and why each directory is or is not answering.
+pub fn repos_json(c: &Corpora) -> Json {
+    let (mode, skipped, warning) = match c {
+        Corpora::One {
+            skipped, warning, ..
+        } => ("corpus", skipped, warning.clone()),
+        Corpora::Many { skipped, .. } => ("workspace", skipped, None),
+    };
+    let repos: Vec<Json> = c.repos().into_iter().map(repo_json).collect();
+    let skipped: Vec<Json> = skipped
+        .iter()
+        .map(|s| {
+            Json::obj()
+                .set("name", s.name.as_str())
+                .set("reason", s.reason.as_str())
+        })
+        .collect();
+    Json::obj()
+        .set("mode", mode)
+        .set("repos", repos)
+        .set("skipped", skipped)
+        .set_opt("warning", warning)
+}
+
+pub fn repos_text(c: &Corpora) -> String {
+    let mut s = String::new();
+    let (mode, skipped, warning) = match c {
+        Corpora::One {
+            skipped, warning, ..
+        } => ("corpus", skipped, warning.as_deref()),
+        Corpora::Many { skipped, .. } => ("workspace", skipped, None),
+    };
+    let repos = c.repos();
+    s.push_str(&format!(
+        "{}: {} repositor{}\n",
+        mode,
+        repos.len(),
+        if repos.len() == 1 { "y" } else { "ies" }
+    ));
+    for r in repos {
+        let mut note = String::new();
+        if let Some(w) = &r.worktree {
+            note.push_str(&match &w.parent {
+                Some(p) => format!("   worktree of {}", p),
+                None => format!("   worktree of {}", w.parent_root.display()),
+            });
+        }
+        if r.shadowed {
+            note.push_str("   shadowed");
+        }
+        s.push_str(&format!("  {:<28} {}{}\n", r.name, r.root.display(), note));
+    }
+    if !skipped.is_empty() {
+        s.push_str("skipped:\n");
+        for k in skipped {
+            s.push_str(&format!("  {}: {}\n", k.name, k.reason));
+        }
+    }
+    if let Some(w) = warning {
+        s.push_str(&format!("warning: {}\n", w));
+    }
+    s
+}
+
+// ---------------------------------------------------------- resource names
+//
+// A repository name is a directory basename, and a valid basename may hold a
+// space, `#`, `%` or `?`. Inside a URI those are not text, so a name is
+// percent-encoded on the way out and decoded on the way in — and what comes
+// back is looked up against the discovered names, never used as a path.
+
+/// RFC 3986 unreserved characters pass; every other byte is `%XX`.
+pub fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
+/// `None` for a malformed escape or bytes that are not UTF-8.
+pub fn percent_decode(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }

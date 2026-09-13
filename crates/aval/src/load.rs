@@ -42,6 +42,10 @@ pub struct Loaded {
 pub enum LoadError {
     /// No registry anywhere above the working directory.
     NoRegistry(PathBuf),
+    /// No registry above the launch directory, and none in any child either:
+    /// `discover` looked both ways. Its own variant so the ordinary CLI paths,
+    /// which only walk up, never claim to have searched children.
+    NoCorpora(PathBuf),
     /// Could not read something that must be readable.
     Unreadable(String),
     /// The corpus is structurally invalid: Layer A.
@@ -54,6 +58,12 @@ impl fmt::Display for LoadError {
             LoadError::NoRegistry(p) => write!(
                 f,
                 "no {} in {} or any parent directory",
+                REGISTRY,
+                p.display()
+            ),
+            LoadError::NoCorpora(p) => write!(
+                f,
+                "no {} in {}, any parent directory, or any child directory",
                 REGISTRY,
                 p.display()
             ),
@@ -123,8 +133,30 @@ pub fn find_root(from: &Path) -> Option<PathBuf> {
     None
 }
 
+/// The canonical form of a directory that exists, or why it could not be read.
+///
+/// `find_root` may hand back `""` for a registry in the working directory
+/// reached through `-C sub`; `canonicalize("")` fails, so that spelling is
+/// `.` first.
+fn canonical(p: &Path) -> Result<PathBuf, LoadError> {
+    let p = if p.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        p
+    };
+    fs::canonicalize(p).map_err(|e| LoadError::Unreadable(format!("{}: {}", p.display(), e)))
+}
+
 pub fn load(from: &Path) -> Result<Loaded, LoadError> {
     let root = find_root(from).ok_or_else(|| LoadError::NoRegistry(from.to_path_buf()))?;
+    // Canonical, so the root that reaches `git -C root blame -- root/file` is
+    // absolute. As typed, a relative `-C` made that pathspec miss after git's
+    // chdir and every contradiction reported `unavailable` — silently, and
+    // only on the CLI, since the server is always started with an absolute
+    // path. One loader, one fix, both surfaces. The walk itself stays lexical:
+    // `find_root` ran on `from` as given, so which registry answers is
+    // unchanged.
+    let root = canonical(&root)?;
     let reg_path = root.join(REGISTRY);
     let reg_src = fs::read_to_string(&reg_path)
         .map_err(|e| LoadError::Unreadable(format!("{}: {}", reg_path.display(), e)))?;
@@ -268,6 +300,245 @@ pub fn load(from: &Path) -> Result<Loaded, LoadError> {
         adr_dir,
         files,
         packs,
+    })
+}
+
+// --------------------------------------------------------------- discovery
+//
+// A launch directory with no corpus of its own may be the parent of several.
+// `discover` looks up first, exactly as `load` does, and only then one level
+// down — so a repository keeps answering as itself, and a workspace root
+// answers for what it contains.
+
+/// A linked git worktree: `<root>/.git` is a file naming the parent's
+/// `.git/worktrees/<name>` directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Worktree {
+    /// Canonical root of the repository this is a worktree of.
+    pub parent_root: PathBuf,
+    /// That repository's name, when it is itself one of the discovered corpora.
+    pub parent: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Repo {
+    /// The directory's basename. Unique among siblings by construction, which
+    /// is why it needs no second field that could disagree with the path.
+    pub name: String,
+    /// Canonical and absolute, in every payload, always.
+    pub root: PathBuf,
+    pub worktree: Option<Worktree>,
+    /// A corpus beneath an active walk-up root: present, and not answering.
+    pub shadowed: bool,
+}
+
+/// A directory that looked like a corpus and was not usable as one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skipped {
+    pub name: String,
+    pub reason: String,
+}
+
+#[derive(Debug)]
+pub enum Corpora {
+    /// A registry above the launch directory answers. Corpora directly beneath
+    /// it are listed as shadowed; scanning for them is diagnostic only, and a
+    /// failure to scan is a warning, never a reason for the active corpus to
+    /// stop answering.
+    One {
+        active: Repo,
+        nested: Vec<Repo>,
+        skipped: Vec<Skipped>,
+        warning: Option<String>,
+    },
+    /// No registry above; these are the corpora one level below.
+    Many {
+        repos: Vec<Repo>,
+        skipped: Vec<Skipped>,
+    },
+}
+
+impl Corpora {
+    /// Every repository, active first, in the order a caller sees them.
+    pub fn repos(&self) -> Vec<&Repo> {
+        match self {
+            Corpora::One { active, nested, .. } => {
+                std::iter::once(active).chain(nested.iter()).collect()
+            }
+            Corpora::Many { repos, .. } => repos.iter().collect(),
+        }
+    }
+}
+
+pub fn discover(launch: &Path) -> Result<Corpora, LoadError> {
+    if let Some(root) = find_root(launch) {
+        let root = canonical(&root)?;
+        let active = Repo {
+            name: basename(&root),
+            worktree: worktree_of(&root, &[]),
+            root: root.clone(),
+            shadowed: false,
+        };
+        // The scan anchor is the corpus root, not the launch directory, so the
+        // answer is the same from `repo/` and from `repo/docs/`.
+        let (mut nested, skipped, warning) = match scan(&root) {
+            Ok((repos, skipped)) => (repos, skipped, None),
+            Err(e) => (Vec::new(), Vec::new(), Some(e)),
+        };
+        for r in &mut nested {
+            r.shadowed = true;
+        }
+        return Ok(Corpora::One {
+            active,
+            nested,
+            skipped,
+            warning,
+        });
+    }
+    let launch = canonical(launch)?;
+    // Here the scan is the answer, so its failure is one too: a permissions
+    // error reported as an empty workspace would be a lie.
+    let (repos, skipped) = scan(&launch).map_err(LoadError::Unreadable)?;
+    if repos.is_empty() {
+        return Err(LoadError::NoCorpora(launch));
+    }
+    Ok(Corpora::Many { repos, skipped })
+}
+
+fn basename(root: &Path) -> String {
+    root.file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| root.display().to_string())
+}
+
+/// The corpora directly beneath `dir`, sorted by name and deduplicated by
+/// canonical root.
+///
+/// Both are load-bearing: `read_dir` order is unspecified, and two names for
+/// one directory would make the same corpus answer twice. Every directory that
+/// carried a registry and could not be used is reported with its reason; a
+/// plain file, or a directory with no registry, is simply not a corpus.
+fn scan(dir: &Path) -> Result<(Vec<Repo>, Vec<Skipped>), String> {
+    let rd = fs::read_dir(dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
+    let mut found: Vec<(String, PathBuf)> = Vec::new();
+    let mut skipped: Vec<Skipped> = Vec::new();
+    let skip = |skipped: &mut Vec<Skipped>, name: String, reason: String| {
+        skipped.push(Skipped { name, reason })
+    };
+    for entry in rd {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                skip(&mut skipped, "?".into(), e.to_string());
+                continue;
+            }
+        };
+        let raw = entry.file_name();
+        let Some(name) = raw.to_str().map(str::to_string) else {
+            // The name is both a JSON key and a tool argument, and neither can
+            // carry bytes that are not text.
+            skip(
+                &mut skipped,
+                raw.to_string_lossy().into_owned(),
+                "name is not UTF-8".into(),
+            );
+            continue;
+        };
+        let child = entry.path();
+        match fs::metadata(&child) {
+            Ok(m) if m.is_dir() => {}
+            Ok(_) => continue,
+            Err(e) => {
+                skip(&mut skipped, name, e.to_string());
+                continue;
+            }
+        }
+        // `metadata`, not `is_file`: the latter turns "permission denied" into
+        // "not a corpus", and the difference is the whole point of reporting.
+        match fs::metadata(child.join(REGISTRY)) {
+            Ok(m) if m.is_file() => {}
+            Ok(_) => {
+                skip(
+                    &mut skipped,
+                    name,
+                    format!("{} is not a regular file", REGISTRY),
+                );
+                continue;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                skip(&mut skipped, name, format!("{}: {}", REGISTRY, e));
+                continue;
+            }
+        }
+        match fs::canonicalize(&child) {
+            Ok(root) => found.push((name, root)),
+            Err(e) => skip(&mut skipped, name, e.to_string()),
+        }
+    }
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut repos: Vec<Repo> = Vec::new();
+    for (name, root) in found {
+        if let Some(first) = repos.iter().find(|r| r.root == root) {
+            skip(
+                &mut skipped,
+                name,
+                format!("the same directory as `{}`", first.name),
+            );
+            continue;
+        }
+        repos.push(Repo {
+            name,
+            root,
+            worktree: None,
+            shadowed: false,
+        });
+    }
+    // Worktrees last, once every root is known, so a worktree's parent can be
+    // named when it is among them.
+    let known: Vec<(String, PathBuf)> = repos
+        .iter()
+        .map(|r| (r.name.clone(), r.root.clone()))
+        .collect();
+    for r in &mut repos {
+        r.worktree = worktree_of(&r.root, &known);
+    }
+    skipped.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok((repos, skipped))
+}
+
+/// Whether `root` is a linked worktree, read from its `.git` file.
+///
+/// No subprocess: the file is one line, `gitdir: <path>`, and the path says
+/// what this is. `<parent>/.git/worktrees/<name>` is a linked worktree of
+/// `<parent>`. `<parent>/.git/modules/<name>` is a **submodule**, which is a
+/// repository of its own and not this function's business. A relative path is
+/// relative to the worktree directory, the way git reads it.
+fn worktree_of(root: &Path, known: &[(String, PathBuf)]) -> Option<Worktree> {
+    let dotgit = root.join(".git");
+    if !fs::metadata(&dotgit).ok()?.is_file() {
+        return None;
+    }
+    let text = fs::read_to_string(&dotgit).ok()?;
+    let gitdir = text
+        .lines()
+        .find_map(|l| l.strip_prefix("gitdir:"))
+        .map(str::trim)?;
+    let gitdir = if Path::new(gitdir).is_absolute() {
+        PathBuf::from(gitdir)
+    } else {
+        root.join(gitdir)
+    };
+    let s = gitdir.to_string_lossy().replace('\\', "/");
+    let at = s.find("/.git/worktrees/")?;
+    let parent_root = fs::canonicalize(&s[..at]).ok()?;
+    let parent = known
+        .iter()
+        .find(|(_, p)| *p == parent_root)
+        .map(|(n, _)| n.clone());
+    Some(Worktree {
+        parent_root,
+        parent,
     })
 }
 

@@ -32,7 +32,9 @@ fn loaded(name: &str) -> Loaded {
     let base = conformance_dir().join("corpora").join(name);
     match aval::load::load(&base) {
         Ok(l) => l,
-        Err(LoadError::NoRegistry(p)) => panic!("{}: no registry at {}", name, p.display()),
+        Err(LoadError::NoRegistry(p)) | Err(LoadError::NoCorpora(p)) => {
+            panic!("{}: no registry at {}", name, p.display())
+        }
         Err(LoadError::Unreadable(m)) => panic!("{}: {}", name, m),
         Err(LoadError::Invalid(f)) => panic!("{}: layer A: {:?}", name, f),
     }

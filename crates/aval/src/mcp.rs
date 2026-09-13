@@ -127,7 +127,7 @@ pub fn handle(root: &Path, line: &str) -> Option<Json> {
         "notifications/initialized" => result(id, Json::obj()),
         "ping" => result(id, Json::obj()),
         "tools/list" => result(id, Json::obj().set("tools", tools())),
-        "resources/list" => result(id, Json::obj().set("resources", resources())),
+        "resources/list" => result(id, Json::obj().set("resources", resources(root))),
         "resources/read" => resources_read(root, id, &msg),
         "tools/call" => tools_call(root, id, &msg),
         other => error(id, METHOD_NOT_FOUND, &format!("no method `{}`", other)),
@@ -214,8 +214,14 @@ const KEY_ARG: &str = "The exact decision key, e.g. `stack.sql-layer`. Exact \
 const SCOPE_ARG: &str = "The scope to ask at, e.g. `homelab`. Omit for the \
      default scope `*`. An undeclared scope is rejected, never absorbed into \
      the default.";
+const REPO_ARG: &str = "Which repository, by directory name, when the server \
+     was started in a WORKSPACE — a directory with no corpus of its own above \
+     several that have one. Omit to ask the launch directory's own corpus, or, \
+     in a workspace, to ask every repository at once and get a map keyed by \
+     name. aval_repos lists what there is.";
 
 fn tools() -> Vec<Json> {
+    let repo = ("repo", prop("string", REPO_ARG));
     vec![
         tool(
             "aval_resolve",
@@ -227,11 +233,16 @@ fn tools() -> Vec<Json> {
              one, say so.\n\n\
              A `suggestion` is ADVISORY: do not substitute it and call again. \
              `inherited: true` means the answer came from the default scope. \
-             `pack` names the repository a vendored decision belongs to.",
+             `pack` names the repository a vendored decision belongs to.\n\n\
+             In a workspace with no `repo`, the result is `{repos: {name: \
+             verdict}}` — every repository's own answer, `unknown` included \
+             where a key is not declared. That is the cross-repository question, \
+             answered once.",
             schema(
                 vec![
                     ("key", prop("string", KEY_ARG)),
                     ("scope", prop("string", SCOPE_ARG)),
+                    repo.clone(),
                 ],
                 vec!["key"],
             ),
@@ -245,18 +256,22 @@ fn tools() -> Vec<Json> {
              only an exact key resolves.\n\n\
              `scopes: null` means every declared scope; `[]` means fleet-wide \
              only. `detail: \"full\"` adds where each key is already decided, at \
-             roughly twice the size.",
+             roughly twice the size. In a workspace with no `repo`: a map of \
+             every repository's vocabulary.",
             schema(
-                vec![(
-                    "detail",
-                    Json::obj()
-                        .set("type", "string")
-                        .set("enum", vec!["names", "full"])
-                        .set(
-                            "description",
-                            "`names` (default) or `full`, which adds `decided`.",
-                        ),
-                )],
+                vec![
+                    (
+                        "detail",
+                        Json::obj()
+                            .set("type", "string")
+                            .set("enum", vec!["names", "full"])
+                            .set(
+                                "description",
+                                "`names` (default) or `full`, which adds `decided`.",
+                            ),
+                    ),
+                    repo.clone(),
+                ],
                 vec![],
             ),
         ),
@@ -266,9 +281,11 @@ fn tools() -> Vec<Json> {
              of HEADS.md, for orienting at the start of a task.\n\n\
              A SUPERSET of that file: a slot whose records compete appears here \
              as `contradiction`, where the projection omits it and so reads as \
-             though nothing were decided. Also available as the `aval://heads` \
-             resource, which a client can attach once instead of calling this.",
-            schema(vec![], vec![]),
+             though nothing were decided. Also a resource — `aval://heads` in a \
+             corpus, `aval://<repo>/heads` in a workspace — which a client can \
+             attach once instead of calling this. In a workspace with no `repo`: \
+             every repository's heads at once, which is large; prefer naming one.",
+            schema(vec![repo.clone()], vec![]),
         ),
         tool(
             "aval_show",
@@ -276,15 +293,19 @@ fn tools() -> Vec<Json> {
              `derived_status` is computed from supersession edges, never read \
              from a status line: `active`, `superseded`, `partially-superseded`, \
              `draft` or `empty`. Each entry says whether it is still the head for \
-             its slot. Accepts a vendored id like `decisions:ADR-0002`.",
+             its slot. Accepts a vendored id like `decisions:ADR-0002`. Record \
+             ids are local to a corpus, so in a workspace `repo` is required.",
             schema(
-                vec![(
-                    "record",
-                    prop(
-                        "string",
-                        "A record id, e.g. `ADR-0002` or `decisions:ADR-0002`.",
+                vec![
+                    (
+                        "record",
+                        prop(
+                            "string",
+                            "A record id, e.g. `ADR-0002` or `decisions:ADR-0002`.",
+                        ),
                     ),
-                )],
+                    repo.clone(),
+                ],
                 vec!["record"],
             ),
         ),
@@ -298,9 +319,24 @@ fn tools() -> Vec<Json> {
                 vec![
                     ("key", prop("string", KEY_ARG)),
                     ("scope", prop("string", SCOPE_ARG)),
+                    repo,
                 ],
                 vec!["key"],
             ),
+        ),
+        tool(
+            "aval_repos",
+            "What discovery saw from the launch directory, and why each repository \
+             is or is not answering.\n\n\
+             `mode` is `corpus` — a registry above the launch directory answers \
+             as itself — or `workspace` — none above, so the corpora one level \
+             down answer, each addressable by `repo` and all at once when it is \
+             omitted. A `worktree` entry names the repository it is a branch of; \
+             a worktree whose parent is also listed is left out of all-at-once \
+             answers so the same corpus does not answer twice. `shadowed` marks a \
+             corpus beneath an active one. `skipped` names directories that \
+             looked like a corpus and could not be used, with the reason.",
+            schema(vec![], vec![]),
         ),
     ]
 }
@@ -313,30 +349,68 @@ fn tools() -> Vec<Json> {
 // session-start hook prints exactly this. Offering it both ways lets a client
 // choose which it pays for rather than paying twice.
 
+//
+// In a workspace the map is NOT a resource. A resource is attached at session
+// start and stays; every repository's heads at once is tens of kilobytes that
+// a client would carry for the whole session whether or not it ever needed
+// them. So a workspace offers one pair of URIs per repository instead, and the
+// bare `aval://heads` / `aval://keys` keep meaning the walk-up corpus — they
+// are simply absent where there is none, exactly as they errored before.
+
+const REPOS_URI: &str = "aval://repos";
 const HEADS_URI: &str = "aval://heads";
 const KEYS_URI: &str = "aval://keys";
+const SCHEME: &str = "aval://";
 
-fn resources() -> Vec<Json> {
-    vec![
-        Json::obj()
-            .set("uri", HEADS_URI)
-            .set("name", "Architecture decision heads")
-            .set(
-                "description",
-                "Every slot that has a decision, with its state. What the \
-                 session-start hook prints, as data.",
-            )
-            .set("mimeType", "application/json"),
-        Json::obj()
-            .set("uri", KEYS_URI)
-            .set("name", "Decision vocabulary")
-            .set(
-                "description",
-                "Every decision key and the scopes it is answerable at. \
-                 Discovery, not authority.",
-            )
-            .set("mimeType", "application/json"),
-    ]
+fn resource(uri: &str, name: &str, description: &str) -> Json {
+    Json::obj()
+        .set("uri", uri)
+        .set("name", name)
+        .set("description", description)
+        .set("mimeType", "application/json")
+}
+
+const HEADS_DESC: &str = "Every slot that has a decision, with its state. What \
+     the session-start hook prints, as data.";
+const KEYS_DESC: &str = "Every decision key and the scopes it is answerable \
+     at. Discovery, not authority.";
+
+fn resources(root: &Path) -> Vec<Json> {
+    let mut v = vec![resource(
+        REPOS_URI,
+        "Repositories",
+        "What discovery saw from the launch directory: the corpus answering as \
+         itself, or the corpora one level down in a workspace, with worktrees \
+         and shadowing named.",
+    )];
+    match load::discover(root) {
+        Ok(load::Corpora::One { .. }) => {
+            v.push(resource(
+                HEADS_URI,
+                "Architecture decision heads",
+                HEADS_DESC,
+            ));
+            v.push(resource(KEYS_URI, "Decision vocabulary", KEYS_DESC));
+        }
+        Ok(load::Corpora::Many { repos, .. }) => {
+            for r in &repos {
+                let enc = render::percent_encode(&r.name);
+                v.push(resource(
+                    &format!("{}{}/heads", SCHEME, enc),
+                    &format!("{} — decision heads", r.name),
+                    HEADS_DESC,
+                ));
+                v.push(resource(
+                    &format!("{}{}/keys", SCHEME, enc),
+                    &format!("{} — decision vocabulary", r.name),
+                    KEYS_DESC,
+                ));
+            }
+        }
+        // Nothing to list beyond the report that says why.
+        Err(_) => {}
+    }
+    v
 }
 
 fn resources_read(root: &Path, id: Json, msg: &Json) -> Json {
@@ -347,32 +421,96 @@ fn resources_read(root: &Path, id: Json, msg: &Json) -> Json {
     else {
         return error(id, INVALID_PARAMS, "`params.uri` must be a string");
     };
-    let out = match uri {
-        HEADS_URI => call_heads(root),
-        KEYS_URI => call_keys(root, render::Detail::Names),
-        other => {
-            return error(
-                id,
-                INVALID_PARAMS,
-                &format!(
-                    "no resource `{}`; this server has {} and {}",
-                    other, HEADS_URI, KEYS_URI
-                ),
-            )
-        }
+    let contents = |payload: Json| {
+        result(
+            id.clone(),
+            Json::obj().set(
+                "contents",
+                vec![Json::obj()
+                    .set("uri", uri)
+                    .set("mimeType", "application/json")
+                    .set("text", payload.to_string())],
+            ),
+        )
     };
     // A corpus that will not load is reported the way it is for a tool: the
     // reason travels with the answer rather than as a protocol failure.
-    result(
-        id,
-        Json::obj().set(
-            "contents",
-            vec![Json::obj()
-                .set("uri", uri)
-                .set("mimeType", "application/json")
-                .set("text", out.payload.to_string())],
+    let corpora = match load::discover(root) {
+        Ok(c) => c,
+        Err(e) => {
+            return match uri {
+                REPOS_URI | HEADS_URI | KEYS_URI => {
+                    contents(render::error_json(3, &e.to_string(), e.findings()))
+                }
+                other => error(id, INVALID_PARAMS, &format!("no resource `{}`", other)),
+            }
+        }
+    };
+    if uri == REPOS_URI {
+        return contents(render::repos_json(&corpora));
+    }
+    let read = |r: &load::Repo, kind: &str| match corpus(&r.root) {
+        Ok(l) => match kind {
+            "heads" => render::heads_in(&l).json,
+            _ => render::keys_in(&l, render::Detail::Names).json,
+        },
+        Err(o) => o.payload,
+    };
+    match (&corpora, uri) {
+        (load::Corpora::One { active, .. }, HEADS_URI) => contents(read(active, "heads")),
+        (load::Corpora::One { active, .. }, KEYS_URI) => contents(read(active, "keys")),
+        (load::Corpora::Many { repos, .. }, HEADS_URI | KEYS_URI) => error(
+            id,
+            INVALID_PARAMS,
+            &format!(
+                "`{}` names the launch directory's own corpus, and this is a \
+                 workspace; read aval://<repo>/{} for one of: {}",
+                uri,
+                uri.trim_start_matches(SCHEME),
+                names(repos)
+            ),
         ),
-    )
+        (load::Corpora::Many { repos, .. }, other) => {
+            // `aval://<encoded name>/<kind>`: decode, then look the name up.
+            // The decoded text is a key into the discovered set, never a path.
+            let found = other
+                .strip_prefix(SCHEME)
+                .and_then(|rest| rest.rsplit_once('/'))
+                .filter(|(_, kind)| *kind == "heads" || *kind == "keys")
+                .and_then(|(enc, kind)| render::percent_decode(enc).map(|n| (n, kind)))
+                .and_then(|(name, kind)| repos.iter().find(|r| r.name == name).map(|r| (r, kind)));
+            match found {
+                Some((r, kind)) => contents(read(r, kind)),
+                None => error(
+                    id,
+                    INVALID_PARAMS,
+                    &format!(
+                        "no resource `{}`; this workspace has {} and aval://<repo>/heads, \
+                         aval://<repo>/keys for: {}",
+                        other,
+                        REPOS_URI,
+                        names(repos)
+                    ),
+                ),
+            }
+        }
+        (load::Corpora::One { active, .. }, other) => error(
+            id,
+            INVALID_PARAMS,
+            &format!(
+                "no resource `{}`; this corpus (`{}`) has {}, {} and {}",
+                other, active.name, REPOS_URI, HEADS_URI, KEYS_URI
+            ),
+        ),
+    }
+}
+
+fn names(repos: &[load::Repo]) -> String {
+    repos
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 // -------------------------------------------------------------------- call
@@ -402,6 +540,57 @@ impl Out {
     }
 }
 
+/// One tool call, with its arguments checked and nothing loaded yet.
+///
+/// Validation happens before discovery on purpose: a malformed call is a
+/// protocol error whether or not there is a corpus to ask, and a caller must
+/// not have to guess which of the two it got.
+enum Ask<'a> {
+    Resolve { key: &'a str, scope: &'a str },
+    Keys(render::Detail),
+    Heads,
+    Show(&'a str),
+    History { key: &'a str, scope: &'a str },
+}
+
+impl Ask<'_> {
+    fn run(&self, l: &load::Loaded) -> render::Reply {
+        match self {
+            Ask::Resolve { key, scope } => render::resolve_in(l, key, scope),
+            Ask::Keys(d) => render::keys_in(l, *d),
+            Ask::Heads => render::heads_in(l),
+            Ask::Show(id) => render::show_in(l, id),
+            Ask::History { key, scope } => render::history_in(l, key, scope),
+        }
+    }
+}
+
+/// Which corpus, or corpora, a call is addressed to.
+enum Target {
+    Single(std::path::PathBuf),
+    All(Vec<load::Repo>),
+}
+
+/// Pair a `repo` argument with what discovery found.
+fn select(corpora: &load::Corpora, repo: Option<&str>) -> Result<Target, String> {
+    match (corpora, repo) {
+        (load::Corpora::One { active, .. }, None) => Ok(Target::Single(active.root.clone())),
+        (load::Corpora::One { active, .. }, Some(r)) if r == active.name => {
+            Ok(Target::Single(active.root.clone()))
+        }
+        (load::Corpora::One { active, .. }, Some(r)) => Err(format!(
+            "no repo `{}`; this is the corpus `{}`, and a corpus answers only as itself",
+            r, active.name
+        )),
+        (load::Corpora::Many { repos, .. }, None) => Ok(Target::All(repos.clone())),
+        (load::Corpora::Many { repos, .. }, Some(r)) => repos
+            .iter()
+            .find(|x| x.name == r)
+            .map(|x| Target::Single(x.root.clone()))
+            .ok_or_else(|| format!("no repo `{}`; this workspace has: {}", r, names(repos))),
+    }
+}
+
 fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
     let params = msg.get("params");
     let Some(name) = params.and_then(|p| p.get("name")).and_then(|n| n.as_str()) else {
@@ -409,13 +598,33 @@ fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
     };
     let args = params.and_then(|p| p.get("arguments"));
 
+    if name == "aval_repos" {
+        if let Some(Json::Obj(m)) = args {
+            if !m.is_empty() {
+                return error(id, INVALID_PARAMS, "`aval_repos` takes no arguments");
+            }
+        }
+        let out = match load::discover(root) {
+            Ok(c) => Out::ok(render::repos_json(&c)),
+            Err(e) => Out::failed(render::error_json(3, &e.to_string(), e.findings())),
+        };
+        return reply(id, out);
+    }
+
     // A missing or mistyped ARGUMENT is a protocol error: the call was
     // malformed, and no reading of a tool result would help a client fix it.
     // A well-formed argument naming something the corpus does not carry is a
     // tool result instead — that is an answer, and it carries the suggestion.
-    let out = match name {
+    let repo = match repo_arg(args) {
+        Ok(r) => r,
+        Err(e) => return error(id, INVALID_PARAMS, &e),
+    };
+    let ask = match name {
         "aval_resolve" => match req_str(args, "key") {
-            Ok(key) => call_resolve(root, key, opt_str(args, "scope")),
+            Ok(key) => Ask::Resolve {
+                key,
+                scope: opt_str(args, "scope").unwrap_or(DEFAULT_SCOPE),
+            },
             Err(e) => return error(id, INVALID_PARAMS, &e),
         },
         "aval_keys" => {
@@ -432,15 +641,18 @@ fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
                     )
                 }
             };
-            call_keys(root, detail)
+            Ask::Keys(detail)
         }
-        "aval_heads" => call_heads(root),
+        "aval_heads" => Ask::Heads,
         "aval_show" => match req_str(args, "record") {
-            Ok(r) => call_show(root, r),
+            Ok(r) => Ask::Show(r),
             Err(e) => return error(id, INVALID_PARAMS, &e),
         },
         "aval_history" => match req_str(args, "key") {
-            Ok(key) => call_history(root, key, opt_str(args, "scope")),
+            Ok(key) => Ask::History {
+                key,
+                scope: opt_str(args, "scope").unwrap_or(DEFAULT_SCOPE),
+            },
             Err(e) => return error(id, INVALID_PARAMS, &e),
         },
         other => {
@@ -456,6 +668,55 @@ fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
         }
     };
 
+    // Discovery, then the corpus — both fresh, both in-band when they fail.
+    let corpora = match load::discover(root) {
+        Ok(c) => c,
+        Err(e) => {
+            return reply(
+                id,
+                Out::failed(render::error_json(3, &e.to_string(), e.findings())),
+            )
+        }
+    };
+    let out = match select(&corpora, repo) {
+        Err(e) => return error(id, INVALID_PARAMS, &e),
+        Ok(Target::Single(r)) => match corpus(&r) {
+            Ok(l) => {
+                let r = ask.run(&l);
+                Out {
+                    payload: r.json,
+                    is_error: r.is_error,
+                }
+            }
+            Err(o) => o,
+        },
+        Ok(Target::All(repos)) => {
+            // Record ids are local to a corpus (SEMANTICS section 3.8): the
+            // same `ADR-0001` exists in every repository, so "show it" across
+            // a workspace is under-specified rather than unanswered.
+            if let Ask::Show(_) = ask {
+                return error(
+                    id,
+                    INVALID_PARAMS,
+                    &format!(
+                        "`aval_show` needs `repo` in a workspace; this one has: {}",
+                        names(&repos)
+                    ),
+                );
+            }
+            let agg = render::across(&repos, |l, _| ask.run(l));
+            // The map is a report: `isError` only when no member answered
+            // anything, which is exactly the aggregate's exit 3.
+            Out {
+                payload: agg.json(),
+                is_error: agg.exit() == 3,
+            }
+        }
+    };
+    reply(id, out)
+}
+
+fn reply(id: Json, out: Out) -> Json {
     result(
         id,
         Json::obj()
@@ -490,84 +751,24 @@ fn opt_str<'a>(args: Option<&'a Json>, name: &str) -> Option<&'a str> {
     args.and_then(|a| a.get(name)).and_then(|v| v.as_str())
 }
 
-/// Load the corpus, or describe why not in the shape the CLI uses for it.
+/// `repo`, when present, must be a non-empty string.
+///
+/// Not `opt_str`: that treats a non-string as absent, and absent means "every
+/// repository". `{"repo": 123}` would have quietly become a query across the
+/// whole workspace.
+fn repo_arg(args: Option<&Json>) -> Result<Option<&str>, String> {
+    match args.and_then(|a| a.get("repo")) {
+        None => Ok(None),
+        Some(Json::Str(s)) if !s.is_empty() => Ok(Some(s)),
+        Some(Json::Str(_)) => Err("`repo` must not be empty".into()),
+        Some(_) => Err("`repo` must be a string".into()),
+    }
+}
+
+/// Load one corpus, or describe why not in the shape the CLI uses for it.
 ///
 /// `LoadError` renders itself, so this surface and the CLI cannot disagree
 /// about what a load failure says.
 fn corpus(root: &Path) -> Result<load::Loaded, Out> {
     load::load(root).map_err(|e| Out::failed(render::error_json(3, &e.to_string(), e.findings())))
-}
-
-fn call_resolve(root: &Path, key: &str, scope: Option<&str>) -> Out {
-    let l = match corpus(root) {
-        Ok(l) => l,
-        Err(o) => return o,
-    };
-    let scope = scope.unwrap_or(DEFAULT_SCOPE);
-    match render::answer(&l.graph, &l.root, key, scope) {
-        // Every verdict, including `contradiction` and `unknown`, is an answer.
-        Ok(a) => Out::ok(a.json()),
-        // An inconsistent graph is NOT one. This arm is why `Inconsistent` was
-        // lifted out of `Verdict`: while it was a variant carrying exit 3, this
-        // surface reported it `isError: false` — a failure dressed as an answer,
-        // against the rule SEMANTICS section 14.1 states.
-        Err(e) => Out::failed(render::error_json(3, &e.to_string(), &[])),
-    }
-}
-
-fn call_keys(root: &Path, detail: render::Detail) -> Out {
-    match corpus(root) {
-        Ok(l) => Out::ok(render::keys_json(&l.graph, &l.packs, detail)),
-        Err(o) => o,
-    }
-}
-
-fn call_heads(root: &Path) -> Out {
-    match corpus(root) {
-        Ok(l) => Out::ok(render::heads_json(&l.graph)),
-        Err(o) => o,
-    }
-}
-
-fn call_show(root: &Path, id: &str) -> Out {
-    let l = match corpus(root) {
-        Ok(l) => l,
-        Err(o) => return o,
-    };
-    match l.graph.corpus().adr(id) {
-        Some(adr) => Out::ok(render::show_json(&l.graph, adr)),
-        None => {
-            let names: Vec<&str> = l
-                .graph
-                .corpus()
-                .adrs
-                .iter()
-                .map(|a| a.id.as_str())
-                .collect();
-            let sug = aval_core::model::suggest(id, names).map(str::to_string);
-            Out::failed(render::show_unknown_json(id, sug))
-        }
-    }
-}
-
-fn call_history(root: &Path, key: &str, scope: Option<&str>) -> Out {
-    let l = match corpus(root) {
-        Ok(l) => l,
-        Err(o) => return o,
-    };
-    let scope = scope.unwrap_or(DEFAULT_SCOPE);
-    let reg = l.graph.registry();
-    if !reg.has_key(key) {
-        let names: Vec<&str> = reg.keys.iter().map(|k| k.name.as_str()).collect();
-        let sug = aval_core::model::suggest(key, names).map(str::to_string);
-        return Out::failed(render::history_unknown_json("key", key, scope, sug));
-    }
-    if !reg.has_scope(scope) {
-        let names: Vec<&str> = reg.scopes.iter().map(|s| s.as_str()).collect();
-        let sug = aval_core::model::suggest(scope, names).map(str::to_string);
-        return Out::failed(render::history_unknown_json("scope", key, scope, sug));
-    }
-    let slot = aval_core::model::Slot { key, scope };
-    let chain = l.graph.history(slot);
-    Out::ok(render::history_json(&l.graph, slot, &chain))
 }

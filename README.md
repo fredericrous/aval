@@ -101,6 +101,26 @@ load, or a name it does not carry.
 Nothing on that surface writes. Resolving answers a question; deciding is not
 something to do on an agent's behalf.
 
+**From the parent of all your projects**, where there is no corpus above and
+several below, the same server is a **workspace**: every tool takes `repo` to
+name one, and without it answers for all of them at once — a map keyed by
+name, which is the cross-repository question in a single call.
+`aval repos` says what was found, and `--all-repos` renders the same map from
+the shell:
+
+```console
+$ aval resolve stack.sql-layer --scope effect-stack --all-repos
+== decisions ==
+active   ADR-0002   @effect/sql
+
+== homelab ==
+unknown   no such key `stack.sql-layer`
+…
+```
+
+A linked worktree is detected and left out when its parent is also there, so
+one corpus never answers twice; it stays addressable by name.
+
 Codes `1`, `2` and `3` mean the tool failed, was misused, or could not read the
 corpus. They never overlap a verdict, so "I could not look" is never mistaken
 for "I looked and found nothing".

@@ -561,3 +561,300 @@ fn keys_names_omits_where_each_is_decided() {
     assert!(names.out.contains(r#""key":"a.b""#), "{}", names.out);
     assert!(names.out.len() < full.out.len());
 }
+
+// --- repos and --all-repos --------------------------------------------------
+//
+// Workspace fixtures live under the system temp dir, not target/: this
+// repository is a corpus, and a registry-less directory beneath it would walk
+// up and find aval's own `.adr.yaml`.
+
+fn ws_scratch(name: &str) -> PathBuf {
+    let p = std::env::temp_dir().join("aval-cli-tests").join(name);
+    let _ = fs::remove_dir_all(&p);
+    fs::create_dir_all(&p).expect("mkdir");
+    p
+}
+
+fn corpus_at(root: &Path, choice: &str) {
+    write(
+        root,
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [cloud]\nkeys:\n  a.b:\n",
+    );
+    write(
+        root,
+        "docs/adr/0001-one.md",
+        &format!(
+            "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  \
+             - key: a.b\n    choice: {}\n    first: true\n---\n# one\n",
+            choice
+        ),
+    );
+}
+
+fn workspace(name: &str) -> PathBuf {
+    let ws = ws_scratch(name);
+    corpus_at(&ws.join("alpha"), "Alpha");
+    corpus_at(&ws.join("beta"), "Beta");
+    ws
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let o = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("spawn git");
+    assert!(
+        o.status.success(),
+        "git {:?}: {}",
+        args,
+        String::from_utf8_lossy(&o.stderr)
+    );
+}
+
+/// A fixture repository with the machine's own git configuration kept out.
+fn git_init(dir: &Path) {
+    git(
+        dir,
+        &["-c", "init.templateDir=", "init", "-q", "-b", "main"],
+    );
+    git(dir, &["config", "core.hooksPath", "/nonexistent"]);
+    git(dir, &["config", "user.email", "t@example.com"]);
+    git(dir, &["config", "user.name", "t"]);
+    git(dir, &["config", "commit.gpgsign", "false"]);
+}
+
+#[test]
+fn repos_json_lists_name_root_worktree_and_shadowed() {
+    let ws = workspace("repos-json");
+    corpus_at(&ws.join("alpha").join("sub"), "Sub");
+    let gamma = ws.join("gamma");
+    corpus_at(&gamma, "Gamma");
+    write(
+        &gamma,
+        ".git",
+        &format!("gitdir: {}/alpha/.git/worktrees/gamma\n", ws.display()),
+    );
+
+    let got = run(&ws, &["repos", "--json"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(got.out.contains(r#""mode":"workspace""#), "{}", got.out);
+    let canon = fs::canonicalize(ws.join("alpha"))
+        .unwrap()
+        .display()
+        .to_string();
+    assert!(
+        got.out.contains(&format!(r#""root":"{}""#, canon)),
+        "{}",
+        got.out
+    );
+    assert!(got.out.contains(r#""name":"gamma""#), "{}", got.out);
+    assert!(got.out.contains(r#""parent":"alpha""#), "{}", got.out);
+    // Siblings are not the corpus's business; its own children are.
+    let inside = run(&ws.join("alpha"), &["repos", "--json"]);
+    assert!(inside.out.contains(r#""mode":"corpus""#), "{}", inside.out);
+    assert!(
+        inside.out.contains(r#""name":"sub","root""#),
+        "{}",
+        inside.out
+    );
+    assert!(inside.out.contains(r#""shadowed":true"#), "{}", inside.out);
+    assert!(!inside.out.contains(r#""name":"beta""#), "{}", inside.out);
+
+    let text = run(&ws, &["repos"]);
+    assert!(
+        text.out.starts_with("workspace: 3 repositories"),
+        "{}",
+        text.out
+    );
+    assert!(text.out.contains("worktree of alpha"), "{}", text.out);
+}
+
+#[cfg(unix)]
+#[test]
+fn repos_is_sorted_and_deduped() {
+    let ws = ws_scratch("repos-order");
+    // Created out of order; listed in order, whatever `read_dir` says.
+    for n in ["zeta", "alpha", "mid"] {
+        corpus_at(&ws.join(n), n);
+    }
+    std::os::unix::fs::symlink(ws.join("mid"), ws.join("mid-again")).unwrap();
+    let got = run(&ws, &["repos", "--json"]);
+    let a = got.out.find(r#""name":"alpha""#).unwrap();
+    let m = got.out.find(r#""name":"mid""#).unwrap();
+    let z = got.out.find(r#""name":"zeta""#).unwrap();
+    assert!(a < m && m < z, "{}", got.out);
+    assert!(
+        got.out
+            .contains(r#""name":"mid-again","reason":"the same directory as `mid`""#),
+        "{}",
+        got.out
+    );
+}
+
+#[test]
+fn all_repos_exit_is_a_report_not_a_verdict() {
+    // 0: every member loaded, none contradicts — `unknown` members included,
+    // since a key one repository never declared is an answer there.
+    let ws = workspace("exit-clean");
+    write(
+        &ws.join("beta"),
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [cloud]\nkeys:\n  c.d:\n",
+    );
+    write(&ws.join("beta"), "docs/adr/0001-one.md", "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  - key: c.d\n    choice: X\n    first: true\n---\n# one\n");
+    let got = run(&ws, &["resolve", "a.b", "--all-repos", "--json"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(got.out.contains(r#""beta":{"exit":7"#), "{}", got.out);
+
+    // 1: a member contradicts.
+    let ws = workspace("exit-contradiction");
+    write(&ws.join("beta"), "docs/adr/0002-two.md", "---\nid: ADR-0002\nstatus: accepted\ndecisions:\n  - key: a.b\n    choice: Other\n    first: true\n---\n# two\n");
+    let got = run(&ws, &["resolve", "a.b", "--all-repos", "--json"]);
+    assert_eq!(got.code, 1, "{}{}", got.out, got.err);
+    assert!(
+        got.out.contains(r#""state":"contradiction""#),
+        "{}",
+        got.out
+    );
+
+    // 1: a member would not load — its error object stands in its place.
+    let ws = workspace("exit-unloadable");
+    write(
+        &ws.join("beta"),
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [\nkeys:\n  a.b:\n",
+    );
+    let got = run(&ws, &["resolve", "a.b", "--all-repos", "--json"]);
+    assert_eq!(got.code, 1, "{}{}", got.out, got.err);
+    assert!(got.out.contains(r#""beta":{"error":"#), "{}", got.out);
+    assert!(
+        got.out.contains(r#""alpha":{"adr":"ADR-0001""#),
+        "{}",
+        got.out
+    );
+
+    // 3: no member loaded.
+    let ws = workspace("exit-none");
+    for n in ["alpha", "beta"] {
+        write(
+            &ws.join(n),
+            ".adr.yaml",
+            "dir: docs/adr\nscopes: [\nkeys:\n  a.b:\n",
+        );
+    }
+    assert_eq!(
+        run(&ws, &["resolve", "a.b", "--all-repos", "--json"]).code,
+        3
+    );
+
+    // 2: a report has no file to write or check, and one record in one corpus
+    // is not a fleet-wide question.
+    let ws = workspace("exit-usage");
+    assert_eq!(run(&ws, &["heads", "--all-repos", "--write"]).code, 2);
+    assert_eq!(run(&ws, &["heads", "--all-repos", "--check"]).code, 2);
+    assert_eq!(run(&ws, &["show", "ADR-0001", "--all-repos"]).code, 2);
+
+    // Inside a single corpus the shape is the same: a one-member map, so a
+    // script never branches on how many there were.
+    let got = run(
+        &ws.join("alpha"),
+        &["resolve", "a.b", "--all-repos", "--json"],
+    );
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(got.out.starts_with(r#"{"repos":{"alpha":{"#), "{}", got.out);
+
+    // Text form: a heading per member, a member's message where it failed.
+    let ws = workspace("exit-text");
+    write(
+        &ws.join("beta"),
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [\nkeys:\n  a.b:\n",
+    );
+    let got = run(&ws, &["resolve", "a.b", "--all-repos"]);
+    assert!(
+        got.out.contains("== alpha ==\nactive   ADR-0001   Alpha\n"),
+        "{}",
+        got.out
+    );
+    assert!(
+        got.out
+            .contains("== beta ==\naval: the corpus is structurally invalid"),
+        "{}",
+        got.out
+    );
+}
+
+#[test]
+fn a_relative_dash_c_reports_committed_provenance() {
+    // Verified broken before this change: `aval -C relative/path resolve
+    // <contradicted key> --json` reported every head `unavailable` while the
+    // same path spelled absolutely reported `committed`. The pathspec handed
+    // to `git -C root blame` was relative to the wrong directory.
+    let parent = scratch("provenance-parent");
+    let r = parent.join("repo");
+    fs::create_dir_all(&r).unwrap();
+    git_init(&r);
+    write(
+        &r,
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: []\nkeys:\n  a.b:\n",
+    );
+    write(&r, "docs/adr/0001-one.md", "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  - key: a.b\n    choice: One\n    first: true\n---\n# one\n");
+    write(&r, "docs/adr/0002-two.md", "---\nid: ADR-0002\nstatus: accepted\ndecisions:\n  - key: a.b\n    choice: Two\n    first: true\n---\n# two\n");
+    git(&r, &["add", "-A"]);
+    git(&r, &["commit", "-q", "-m", "two heads"]);
+    fs::create_dir_all(parent.join("sibling")).unwrap();
+
+    let absolute = run(
+        &parent,
+        &["-C", r.to_str().unwrap(), "resolve", "a.b", "--json"],
+    );
+    let relative = run(&parent, &["-C", "repo", "resolve", "a.b", "--json"]);
+    let dotdot = run(
+        &parent.join("sibling"),
+        &["-C", "../repo", "resolve", "a.b", "--json"],
+    );
+    for (label, got) in [
+        ("absolute", &absolute),
+        ("relative", &relative),
+        ("../", &dotdot),
+    ] {
+        assert_eq!(got.code, 5, "{}: {}{}", label, got.out, got.err);
+        assert!(
+            got.out.contains(r#""state":"committed""#),
+            "{}: {}",
+            label,
+            got.out
+        );
+        assert!(!got.out.contains("unavailable"), "{}: {}", label, got.out);
+    }
+    assert_eq!(absolute.out, relative.out);
+    assert_eq!(absolute.out, dotdot.out);
+
+    // And through the server, started with the relative path.
+    let o = std::process::Command::new(bin())
+        .args(["-C", "repo", "mcp"])
+        .current_dir(&parent)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut c| {
+            use std::io::Write as _;
+            c.stdin.take().unwrap().write_all(
+                br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"aval_resolve","arguments":{"key":"a.b"}}}
+"#,
+            )?;
+            c.wait_with_output()
+        })
+        .expect("mcp");
+    let reply = String::from_utf8_lossy(&o.stdout);
+    let inner = reply
+        .split(r#""text":""#)
+        .nth(1)
+        .map(|s| s.replace(r#"\""#, "\""))
+        .unwrap_or_default();
+    assert!(inner.starts_with(absolute.out.trim()), "mcp: {}", reply);
+}

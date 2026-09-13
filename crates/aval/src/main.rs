@@ -35,6 +35,9 @@ USAGE
     aval add --check                       are the vendored packs still current
     aval mcp                               serve the corpus as MCP tools on
                                            stdio, read-only, until stdin closes
+    aval repos                             what is answering from here: this
+                                           corpus, or every corpus one level
+                                           down when there is none above
 
 SOURCES
     github:owner/repo   forgejo:host/owner/repo   <git-url>   <path>
@@ -42,6 +45,9 @@ SOURCES
 
 OPTIONS
     --json        machine output on stdout, warnings suppressed
+    --all-repos   resolve, keys, heads, history: ask every corpus `aval repos`
+                  lists, and report them keyed by name (exit 0 clean · 1 a
+                  member contradicts or would not load · 3 none loaded)
     --as <name>   name one vendored pack (add only); it becomes the id prefix
     -C <dir>      run as if started in <dir>
     -h, --help    this
@@ -53,6 +59,7 @@ EXIT
     always   1 tool failure · 2 usage · 3 unreadable or invalid corpus
     mcp      0 stdin closed · 1 transport failure · 2 usage. Never 3: a
              corpus that will not load is reported in the tool result.
+    repos    0 · 2 usage · 3 nothing found, or the directory unreadable
 ";
 
 /// Failures, disjoint from every verdict.
@@ -67,6 +74,7 @@ struct Args {
     as_name: Option<String>,
     json: bool,
     names: bool,
+    all_repos: bool,
     write: bool,
     check: bool,
     dry_run: bool,
@@ -81,6 +89,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         as_name: None,
         json: false,
         names: false,
+        all_repos: false,
         write: false,
         check: false,
         dry_run: false,
@@ -92,6 +101,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         match arg {
             "--json" => a.json = true,
             "--names" => a.names = true,
+            "--all-repos" => a.all_repos = true,
             "--write" => a.write = true,
             "--check" => a.check = true,
             "--dry-run" => a.dry_run = true,
@@ -164,6 +174,7 @@ fn run(args: &Args) -> i32 {
     match args.command.as_str() {
         "resolve" => cmd_resolve(args),
         "keys" => cmd_keys(args),
+        "repos" => cmd_repos(args),
         "mcp" => cmd_mcp(args),
         "check" => cmd_check(args),
         "heads" => cmd_heads(args),
@@ -195,11 +206,65 @@ fn one_positional(args: &Args, what: &str) -> Result<String, i32> {
     }
 }
 
+/// `--all-repos`: the same question to every corpus discovery lists.
+///
+/// The map is a report, not a verdict — SEMANTICS section 14 gives it
+/// `check`'s exit contract. A corpus on its own is a one-member map, so a
+/// script never has to branch on how many there were.
+fn all_repos(args: &Args, ask: impl Fn(&Loaded, &load::Repo) -> render::Reply) -> i32 {
+    let corpora = match load::discover(&args.dir) {
+        Ok(c) => c,
+        Err(e) => {
+            emit_error(args, E_INVALID, &e.to_string(), e.findings());
+            return E_INVALID;
+        }
+    };
+    let repos: Vec<load::Repo> = corpora.repos().into_iter().cloned().collect();
+    let agg = render::across(&repos, ask);
+    if args.json {
+        println!("{}", agg.json());
+    } else {
+        print!("{}", agg.text());
+        let _ = std::io::stdout().flush();
+    }
+    agg.exit()
+}
+
+/// What discovery sees from here, and why each directory is or is not answering.
+fn cmd_repos(args: &Args) -> i32 {
+    if !args.positional.is_empty() {
+        eprintln!("aval: `repos` takes no arguments");
+        return E_USAGE;
+    }
+    match load::discover(&args.dir) {
+        Ok(c) => {
+            if args.json {
+                println!("{}", render::repos_json(&c));
+            } else {
+                print!("{}", render::repos_text(&c));
+                let _ = std::io::stdout().flush();
+            }
+            0
+        }
+        Err(e) => {
+            emit_error(args, E_INVALID, &e.to_string(), e.findings());
+            E_INVALID
+        }
+    }
+}
+
 fn cmd_resolve(args: &Args) -> i32 {
     let key = match one_positional(args, "a decision key") {
         Ok(k) => k,
         Err(c) => return c,
     };
+    if args.all_repos {
+        let scope = args
+            .scope
+            .clone()
+            .unwrap_or_else(|| DEFAULT_SCOPE.to_string());
+        return all_repos(args, |l, _| render::resolve_in(l, &key, &scope));
+    }
     let l = match loaded(args) {
         Ok(l) => l,
         Err(c) => return c,
@@ -236,16 +301,19 @@ fn cmd_keys(args: &Args) -> i32 {
         eprintln!("aval: `keys` takes no arguments");
         return E_USAGE;
     }
+    let detail = if args.names {
+        render::Detail::Names
+    } else {
+        render::Detail::Full
+    };
+    if args.all_repos {
+        return all_repos(args, |l, _| render::keys_in(l, detail));
+    }
     let l = match loaded(args) {
         Ok(l) => l,
         Err(c) => return c,
     };
     if args.json {
-        let detail = if args.names {
-            render::Detail::Names
-        } else {
-            render::Detail::Full
-        };
         println!("{}", render::keys_json(&l.graph, &l.packs, detail));
     } else {
         print!("{}", render::keys_text(&l.graph, &l.packs));
@@ -354,6 +422,15 @@ fn cmd_heads(args: &Args) -> i32 {
     if args.write && args.check {
         eprintln!("aval: `--write` and `--check` are mutually exclusive");
         return E_USAGE;
+    }
+    if args.all_repos {
+        // A projection is written into ONE corpus's tree and checked against
+        // it; a report across several has no file to be either.
+        if args.write || args.check {
+            eprintln!("aval: `--all-repos` reports; it cannot `--write` or `--check`");
+            return E_USAGE;
+        }
+        return all_repos(args, |l, _| render::heads_in(l));
     }
     let l = match loaded(args) {
         Ok(l) => l,
@@ -802,6 +879,12 @@ fn cmd_show(args: &Args) -> i32 {
         Ok(k) => k,
         Err(c) => return c,
     };
+    if args.all_repos {
+        // Record ids are local to a corpus (SEMANTICS section 3.8); the same
+        // `ADR-0001` exists in every repository, so this is under-specified.
+        eprintln!("aval: `show` names one record in one corpus; use -C <repo>, not `--all-repos`");
+        return E_USAGE;
+    }
     let l = match loaded(args) {
         Ok(l) => l,
         Err(c) => return c,
@@ -841,14 +924,17 @@ fn cmd_history(args: &Args) -> i32 {
         Ok(k) => k,
         Err(c) => return c,
     };
-    let l = match loaded(args) {
-        Ok(l) => l,
-        Err(c) => return c,
-    };
     let scope = args
         .scope
         .clone()
         .unwrap_or_else(|| DEFAULT_SCOPE.to_string());
+    if args.all_repos {
+        return all_repos(args, |l, _| render::history_in(l, &key, &scope));
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
     // Both rejections used to print to stderr and return 7 with nothing on
     // stdout, so `history --json` answered a machine caller with silence.
     if !l.graph.registry().has_key(&key) {

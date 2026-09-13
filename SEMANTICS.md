@@ -1,6 +1,6 @@
 # `aval` — normative semantics
 
-Version 1.0.0. This document is the specification. Where an
+Version 1.1.0. This document is the specification. Where an
 implementation and this document disagree, this document is right and the
 implementation is a bug.
 
@@ -815,6 +815,11 @@ after CI moved to `.forgejo/`, is skipped rather than reported.
   after canonicalisation (§12.2), not its bytes.
 - **`--json` writes the result object to stdout and nothing else.** Warnings go
   to stderr and are suppressed under `--json`.
+- **A workspace is a set of trees, and the set is ordered.** `read_dir` returns
+  its entries in no defined order, so discovery (§14.1) sorts repositories by
+  name and deduplicates them by canonical root before anything reads them.
+  Without that, the map's key order, the text's heading order and a symlinked
+  duplicate would all vary from one call to the next over the same disk.
 
 ### 12.2 Freshness is a claim about content
 
@@ -921,6 +926,8 @@ Low codes follow the duro CLI. Verdicts start at 4.
 | `aval add` | A | `0` · `1` unreachable, ambiguous, or refused · `2` · `3` |
 | `aval add --check` | A | `0` current or unknown · `1` behind · `2` · `3` |
 | `aval keys` | A | `0` · `2` · `3` |
+| `aval repos` | — | `0` · `2` · `3` nothing found, or the directory unreadable |
+| `--all-repos` on `resolve` / `keys` / `heads` / `history` | A per member | `0` every member loaded, none exited 5 · `1` a member exited 5 or did not load · `2` with `--write`, `--check`, or on `show` · `3` no member loaded |
 | `aval mcp` | — at startup | `0` stdin closed · `1` transport failure · `2` |
 
 `hook install` reads no corpus and touches no layer. It wires a session-start
@@ -972,7 +979,66 @@ answer, and it carries the advisory suggestion.
 holds no cached graph. A caller edits records in the same session it asks
 questions in, and an answer from a graph loaded earlier would describe a corpus
 that no longer exists. There is deliberately no revision pinning: the revision
-is the tree, and a decision that is not written down yet is not decided.
+is the tree — or, in a workspace, the set of trees — and a decision that is
+not written down yet is not decided.
+
+**A workspace is several corpora, and answers for all of them.** A launch
+directory with no registry above it and one or more directly beneath it is a
+workspace. Discovery looks up first, exactly as `load` does, and only then one
+level down: a repository keeps answering as itself, and a workspace root
+answers for what it contains. The scan is repeated on every call, like the
+load; `read_dir` order is unspecified, so the result is sorted by name and
+deduplicated by canonical root, and both are load-bearing for §12.
+
+In a workspace every tool accepts `repo`, a directory name. Named, a tool
+answers for that corpus alone, and the payload is byte-equal to that
+repository's own `--json`. Omitted, `aval_resolve`, `aval_keys`, `aval_heads`
+and `aval_history` answer for every repository at once:
+
+```json
+{ "repos": { "<name>": { …that repository's own payload… }, … },
+  "worktrees_excluded": { "<name>": "<parent>" } }
+```
+
+That map is a **report**, not a verdict, and `--all-repos` on the CLI renders
+the same one. Its exit follows `check`'s contract rather than `resolve`'s
+(§14): `0` when every member loaded and none exited 5; `1` when a member
+exited 5 or would not load — its error object stands where its answer would,
+because a report does not fail when one member did; `3` when no member loaded.
+`undecided`, `retired` and `unknown` members are answers. On the tool surface
+`isError` is exactly exit 3: **no entry answered anything.** With a single
+corpus the map has one member; the shape never depends on the count.
+
+`aval_show` never aggregates. Record ids are corpus-local (§3.8), so the same
+`ADR-0001` exists in every repository and "show it" across a workspace is
+under-specified rather than unanswered — a protocol error naming the
+repositories, not eight near-misses reported as answers.
+
+**A linked worktree is left out of the map only when its parent is in it.**
+The exclusion is about duplication — the same corpus would otherwise answer
+twice — not about being a worktree: one whose parent is not discovered is the
+only representative of that repository and stays. Either way it remains
+addressable by `repo`, and the omission is named in `worktrees_excluded`. A
+worktree is recognised by its `.git` file naming `.git/worktrees/`; a file
+naming `.git/modules/` is a submodule, a repository of its own.
+
+**Resources never carry the map.** A resource is attached once and kept, and
+every repository's heads is tens of kilobytes a client would then carry for
+the whole session. A workspace offers `aval://repos` and one
+`aval://<name>/heads`, `aval://<name>/keys` pair per repository, the name
+percent-encoded — a directory may be called anything — and decoded back into a
+lookup against the discovered names, never into a path. The bare `aval://heads`
+and `aval://keys` keep meaning the launch directory's own corpus and are absent
+where there is none, exactly as they errored before.
+
+`aval repos` and the `aval_repos` tool report what discovery saw: `mode`
+(`corpus` or `workspace`), each repository's canonical root, its worktree
+parent if any, whether it is `shadowed` beneath an active corpus, and every
+directory that carried a registry and could not be used, with the reason. In a
+corpus that scan is diagnostic — a failure is a `warning` there and never a
+reason for the active corpus to stop answering. In a workspace the scan is the
+answer, so its failure is one: a permissions error reported as an empty
+workspace would be a lie.
 
 **The surface is read-only.** No verb that writes — `heads --write`, `pack
 --write`, `add`, `hook install` — is exposed, and each tool declares

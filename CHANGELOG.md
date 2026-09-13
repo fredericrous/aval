@@ -2,6 +2,66 @@
 
 ## Unreleased
 
+## v1.1.0
+
+A workspace of corpora. `aval mcp` started from a directory with no corpus
+of its own — the parent of every project, say — used to answer every call
+with "no `.adr.yaml` in … or any parent directory". It now discovers the
+corpora one level down and answers for them.
+
+### Added
+
+- **Workspaces.** With no registry above the launch directory, discovery
+  scans its direct children; each that carries a `.adr.yaml` is a
+  repository, named by its directory. Every tool takes an optional
+  `repo`. Named, it answers for that corpus alone, byte-equal to that
+  repository's own `--json`. Omitted, `aval_resolve`, `aval_keys`,
+  `aval_heads` and `aval_history` answer for every repository at once —
+  a map keyed by name, which is the cross-repository question answered
+  in one call. `aval_show` requires `repo`: record ids are corpus-local,
+  and "show `ADR-0001`" across nine repositories is under-specified.
+
+  The map is a report, not a verdict (§14.1). `isError` is true only
+  when no member answered anything; a member that would not load stands
+  in the map as its error object. In-repo behaviour is byte-identical —
+  a corpus found by walking up still wins, as it always did.
+
+- **`aval repos`, and the `aval_repos` tool / `aval://repos` resource** —
+  what discovery saw and why each directory is or is not answering:
+  canonical root, worktree parent, `shadowed`, and every directory that
+  looked like a corpus and could not be used, with its reason.
+
+- **`--all-repos`** on `resolve`, `keys`, `heads` and `history`: the same
+  map the server returns, rendered by the same code, so the two cannot
+  drift. Exit `0` clean · `1` a member exited 5 or would not load · `3`
+  none loaded · `2` with `--write`, `--check` or on `show`.
+
+- **Per-repository resources.** A workspace lists `aval://<repo>/heads`
+  and `aval://<repo>/keys` for each repository, the name percent-encoded.
+  It deliberately does not offer the map as a resource: a resource is
+  attached once and kept, and every repository's heads at once is tens
+  of kilobytes to carry for a whole session.
+
+- **Worktrees are detected, not folded in.** A linked worktree — its
+  `.git` is a file naming `.git/worktrees/` — is left out of the map
+  when its parent is also discovered, since the same corpus would answer
+  twice, and is named in `worktrees_excluded`. One whose parent is not
+  discovered stays in. A submodule is a repository of its own. No git
+  subprocess is involved: the `.git` file is read.
+
+### Fixed
+
+- **A relative `-C` reported every contradiction's provenance as
+  `unavailable`.** The root was used as typed, and the pathspec handed to
+  `git -C root blame` no longer resolved after git's own chdir. The
+  loader canonicalises the root it found, so the CLI and the server are
+  fixed by the one change; which registry answers is unchanged, since the
+  walk itself stays lexical. `heads --check --json` from a relative `-C`
+  now reports the file's absolute path for the same reason.
+
+- `{"repo": 123}` is a protocol error, not a query across every
+  repository: `repo`, when present, must be a non-empty string.
+
 ## v1.0.0
 
 The first stable release, and an agent-surface one: what the tools cost to
