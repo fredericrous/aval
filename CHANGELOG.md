@@ -2,10 +2,18 @@
 
 ## Unreleased
 
-## v0.8.0
+## v1.0.0
 
-An agent-surface release: what the tools cost to call, and what their text
-is.
+The first stable release, and an agent-surface one: what the tools cost to
+call, and what their text is.
+
+**1.0 because this release breaks something.** §3.7's printable-value rule
+is the kind of change §15 calls major, and shipping it as another 0.x
+minor would have been the third release in a row where "breaking" and
+"minor" were the same number. From here the words in §15 mean what semver
+says: a caller may pin `1` and expect the verdicts, their exit codes, the
+note strings, the `--json` field names and the frontmatter dialect to
+hold. §15 lists exactly what that covers and what it does not.
 
 ### Added
 
