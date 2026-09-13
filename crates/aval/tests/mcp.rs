@@ -259,7 +259,7 @@ fn an_unreadable_corpus_is_reported_and_does_not_stop_the_server() {
     let tools = result(&replies[0]).get("tools").and_then(|t| t.as_arr());
     assert_eq!(
         tools.map(<[Json]>::len),
-        Some(5),
+        Some(6),
         "tools/list must still answer"
     );
 
@@ -571,7 +571,7 @@ fn every_tool_is_declared_read_only() {
         .get("tools")
         .and_then(|t| t.as_arr())
         .expect("tools");
-    assert_eq!(tools.len(), 5);
+    assert_eq!(tools.len(), 6);
     for t in tools {
         let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("");
         assert!(name.starts_with("aval_"), "{} needs the prefix", name);
@@ -790,4 +790,713 @@ fn the_server_says_its_corpus_text_is_data() {
             .is_some(),
         "resources capability must be declared"
     );
+}
+
+// --- workspaces --------------------------------------------------------------
+//
+// A launch directory with no corpus of its own, above several that have one.
+//
+// These fixtures live under the system temp dir, NOT under target/: this
+// repository is itself a corpus, so a registry-less directory beneath it would
+// walk up and find aval's own `.adr.yaml`. The temp dir has nothing above it —
+// and on macOS it is a symlink (`/var` → `/private/var`), which is a free test
+// that every root in a payload is canonical.
+
+fn ws_scratch(name: &str) -> PathBuf {
+    let p = std::env::temp_dir().join("aval-mcp-tests").join(name);
+    let _ = fs::remove_dir_all(&p);
+    fs::create_dir_all(&p).expect("mkdir");
+    p
+}
+
+fn canon(p: &Path) -> String {
+    fs::canonicalize(p)
+        .expect("canonicalize")
+        .display()
+        .to_string()
+}
+
+/// One corpus beneath a workspace, deciding `a.b` as `choice`.
+fn child(ws: &Path, name: &str, choice: &str) -> PathBuf {
+    let r = ws.join(name);
+    write(
+        &r,
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [cloud]\nkeys:\n  a.b:\n",
+    );
+    write(
+        &r,
+        "docs/adr/0001-one.md",
+        &format!(
+            "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  \
+             - key: a.b\n    choice: {}\n    first: true\n---\n# one\n",
+            choice
+        ),
+    );
+    r
+}
+
+/// `alpha` and `beta`, each answering `a.b` differently.
+fn workspace(name: &str) -> PathBuf {
+    let ws = ws_scratch(name);
+    child(&ws, "alpha", "Alpha");
+    child(&ws, "beta", "Beta");
+    ws
+}
+
+fn call_id(id: u32, tool: &str, args: &str) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{},"method":"tools/call","params":{{"name":"{}","arguments":{}}}}}"#,
+        id, tool, args
+    )
+}
+
+fn repos_tool(dir: &Path) -> Json {
+    let replies = exchange(dir, &[&call("aval_repos", "{}")]);
+    tool_result(&replies[0]).0.clone()
+}
+
+fn repo_names(map: &Json) -> Vec<String> {
+    match map.get("repos") {
+        Some(Json::Obj(m)) => m.keys().cloned().collect(),
+        Some(Json::Arr(a)) => a
+            .iter()
+            .filter_map(|r| r.get("name").and_then(|n| n.as_str()).map(str::to_string))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn member<'a>(map: &'a Json, name: &str) -> &'a Json {
+    map.get("repos")
+        .and_then(|r| r.get(name))
+        .unwrap_or_else(|| panic!("no member `{}` in {}", name, map))
+}
+
+#[test]
+fn a_workspace_answers_every_repo_in_name_order() {
+    let ws = workspace("answers-all");
+    let replies = exchange(&ws, &[&call("aval_resolve", r#"{"key":"a.b"}"#)]);
+    let (map, is_err) = tool_result(&replies[0]);
+    assert!(!is_err, "{}", map);
+    assert_eq!(repo_names(map), ["alpha", "beta"]);
+    assert_eq!(
+        member(map, "alpha").get("choice").and_then(|c| c.as_str()),
+        Some("Alpha")
+    );
+    assert_eq!(
+        member(map, "beta").get("choice").and_then(|c| c.as_str()),
+        Some("Beta")
+    );
+    assert_eq!(state(member(map, "alpha")), "active");
+    // Nothing excluded, and the field is present anyway: an empty map says
+    // "nothing was left out", which is different from saying nothing.
+    assert_eq!(map.get("worktrees_excluded"), Some(&Json::obj()));
+}
+
+#[test]
+fn each_inner_payload_is_byte_equal_to_that_repos_cli() {
+    let ws = workspace("inner-parity");
+    let replies = exchange(&ws, &[&call("aval_resolve", r#"{"key":"a.b"}"#)]);
+    let (map, _) = tool_result(&replies[0]);
+    for name in ["alpha", "beta"] {
+        assert_eq!(
+            member(map, name).to_string(),
+            cli(&ws.join(name), &["resolve", "a.b", "--json"]).trim(),
+            "{}",
+            name
+        );
+    }
+}
+
+#[test]
+fn the_map_is_byte_equal_to_all_repos_on_the_cli() {
+    // The CLI can produce the map itself, so the parity test covers its
+    // ordering, keys and exclusions — not only the members inside it.
+    let ws = workspace("map-parity");
+    for (tool, args, cli_args) in [
+        (
+            "aval_resolve",
+            r#"{"key":"a.b"}"#,
+            vec!["resolve", "a.b", "--all-repos", "--json"],
+        ),
+        (
+            "aval_keys",
+            "{}",
+            vec!["keys", "--names", "--all-repos", "--json"],
+        ),
+        ("aval_heads", "{}", vec!["heads", "--all-repos", "--json"]),
+        (
+            "aval_history",
+            r#"{"key":"a.b"}"#,
+            vec!["history", "a.b", "--all-repos", "--json"],
+        ),
+    ] {
+        let reply = &exchange(&ws, &[&call(tool, args)])[0];
+        assert_eq!(
+            content(reply, 0).trim(),
+            cli(&ws, &cli_args).trim(),
+            "{}",
+            tool
+        );
+    }
+}
+
+#[test]
+fn an_explicit_repo_returns_the_single_payload_unchanged() {
+    let ws = workspace("explicit-repo");
+    let reply = &exchange(
+        &ws,
+        &[&call("aval_resolve", r#"{"key":"a.b","repo":"beta"}"#)],
+    )[0];
+    let (p, is_err) = tool_result(reply);
+    assert!(!is_err);
+    assert_eq!(state(p), "active");
+    assert!(
+        p.get("repos").is_none(),
+        "named repo must not be wrapped: {}",
+        p
+    );
+    assert_eq!(
+        content(reply, 0).trim(),
+        cli(&ws.join("beta"), &["resolve", "a.b", "--json"]).trim()
+    );
+}
+
+#[test]
+fn an_unknown_repo_is_a_protocol_error_listing_names() {
+    let ws = workspace("unknown-repo");
+    let replies = exchange(
+        &ws,
+        &[&call("aval_resolve", r#"{"key":"a.b","repo":"gamma"}"#)],
+    );
+    assert_eq!(err_code(&replies[0]), -32602);
+    let m = replies[0]
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .unwrap_or("");
+    assert!(m.contains("alpha, beta"), "{}", m);
+}
+
+#[test]
+fn repo_must_be_a_nonempty_string() {
+    // `opt_str` would have read a number as "absent", and absent means every
+    // repository. A caller that mistyped the argument must be told, not
+    // answered for the whole workspace.
+    let ws = workspace("repo-type");
+    for bad in [
+        r#"{"key":"a.b","repo":123}"#,
+        r#"{"key":"a.b","repo":null}"#,
+        r#"{"key":"a.b","repo":""}"#,
+        r#"{"key":"a.b","repo":{}}"#,
+    ] {
+        let replies = exchange(&ws, &[&call("aval_resolve", bad)]);
+        assert_eq!(err_code(&replies[0]), -32602, "{}", bad);
+    }
+}
+
+#[test]
+fn aval_repos_takes_no_arguments() {
+    let ws = workspace("repos-args");
+    let bad = exchange(&ws, &[&call("aval_repos", r#"{"repo":"alpha"}"#)]);
+    assert_eq!(err_code(&bad[0]), -32602);
+    let r = repos_tool(&ws);
+    assert_eq!(r.get("mode").and_then(|m| m.as_str()), Some("workspace"));
+    assert_eq!(repo_names(&r), ["alpha", "beta"]);
+    // Every root is canonical, whatever the temp dir is spelled as.
+    let root = r.get("repos").and_then(|a| a.as_arr()).unwrap()[0]
+        .get("root")
+        .and_then(|x| x.as_str())
+        .unwrap();
+    assert_eq!(root, canon(&ws.join("alpha")));
+}
+
+#[test]
+fn a_walk_up_root_answers_the_single_shape_and_reports_nested_as_shadowed() {
+    let ws = workspace("walk-up");
+    child(&ws.join("alpha"), "sub", "Sub");
+    let alpha = ws.join("alpha");
+
+    // In-repo behaviour is unchanged: no map, the corpus's own verdict.
+    let reply = &exchange(&alpha, &[&call("aval_resolve", r#"{"key":"a.b"}"#)])[0];
+    let (p, _) = tool_result(reply);
+    assert_eq!(p.get("choice").and_then(|c| c.as_str()), Some("Alpha"));
+    assert!(p.get("repos").is_none());
+
+    // The corpus answers only as itself, and says so.
+    let other = exchange(
+        &alpha,
+        &[&call("aval_resolve", r#"{"key":"a.b","repo":"beta"}"#)],
+    );
+    assert_eq!(err_code(&other[0]), -32602);
+    let own = &exchange(
+        &alpha,
+        &[&call("aval_resolve", r#"{"key":"a.b","repo":"alpha"}"#)],
+    )[0];
+    assert_eq!(
+        tool_result(own).0.get("choice").and_then(|c| c.as_str()),
+        Some("Alpha")
+    );
+
+    // The report anchors on the corpus root, not the launch directory: the
+    // same from `alpha/` and `alpha/docs/`, and siblings are not its business.
+    for from in [alpha.clone(), alpha.join("docs")] {
+        let r = repos_tool(&from);
+        assert_eq!(
+            r.get("mode").and_then(|m| m.as_str()),
+            Some("corpus"),
+            "{}",
+            from.display()
+        );
+        let repos = r.get("repos").and_then(|a| a.as_arr()).unwrap();
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0].get("name").and_then(|n| n.as_str()), Some("alpha"));
+        assert_eq!(repos[0].get("shadowed"), Some(&Json::Bool(false)));
+        assert_eq!(repos[1].get("name").and_then(|n| n.as_str()), Some("sub"));
+        assert_eq!(repos[1].get("shadowed"), Some(&Json::Bool(true)));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn the_shadow_scan_failing_does_not_fail_the_active_corpus() {
+    use std::os::unix::fs::PermissionsExt;
+    let ws = workspace("shadow-scan");
+    let alpha = ws.join("alpha");
+    // Execute-only: files beneath can still be opened by name, but the
+    // directory cannot be listed — which is exactly the diagnostic scan.
+    struct Restore(PathBuf);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+        }
+    }
+    let _restore = Restore(alpha.clone());
+    fs::set_permissions(&alpha, fs::Permissions::from_mode(0o100)).unwrap();
+
+    let reply = &exchange(&alpha, &[&call("aval_resolve", r#"{"key":"a.b"}"#)])[0];
+    let (p, is_err) = tool_result(reply);
+    assert!(!is_err, "the active corpus must still answer: {}", p);
+    assert_eq!(state(p), "active");
+
+    let r = repos_tool(&alpha);
+    assert_eq!(r.get("mode").and_then(|m| m.as_str()), Some("corpus"));
+    let w = r.get("warning").and_then(|w| w.as_str()).unwrap_or("");
+    assert!(
+        w.contains("ermission"),
+        "the failed scan is a warning, not silence: {}",
+        r
+    );
+}
+
+#[test]
+fn a_worktree_of_a_discovered_repo_is_excluded_and_named() {
+    let ws = workspace("worktree");
+    let gamma = child(&ws, "gamma", "Gamma");
+    write(
+        &gamma,
+        ".git",
+        &format!("gitdir: {}/alpha/.git/worktrees/gamma\n", ws.display()),
+    );
+
+    let (map, _) = {
+        let replies = exchange(&ws, &[&call("aval_resolve", r#"{"key":"a.b"}"#)]);
+        let (m, e) = tool_result(&replies[0]);
+        (m.clone(), e)
+    };
+    assert_eq!(repo_names(&map), ["alpha", "beta"], "{}", map);
+    assert_eq!(
+        map.get("worktrees_excluded")
+            .and_then(|x| x.get("gamma"))
+            .and_then(|p| p.as_str()),
+        Some("alpha")
+    );
+    // Still addressable by name.
+    let one = &exchange(
+        &ws,
+        &[&call("aval_resolve", r#"{"key":"a.b","repo":"gamma"}"#)],
+    )[0];
+    assert_eq!(
+        tool_result(one).0.get("choice").and_then(|c| c.as_str()),
+        Some("Gamma")
+    );
+
+    let r = repos_tool(&ws);
+    let g = r
+        .get("repos")
+        .and_then(|a| a.as_arr())
+        .unwrap()
+        .iter()
+        .find(|x| x.get("name").and_then(|n| n.as_str()) == Some("gamma"))
+        .unwrap();
+    let wt = g.get("worktree").expect("worktree");
+    assert_eq!(wt.get("parent").and_then(|p| p.as_str()), Some("alpha"));
+    assert_eq!(
+        wt.get("parent_root").and_then(|p| p.as_str()),
+        Some(canon(&ws.join("alpha")).as_str())
+    );
+}
+
+#[test]
+fn a_worktree_with_a_relative_gitdir_resolves_against_itself() {
+    let ws = workspace("worktree-relative");
+    let gamma = child(&ws, "gamma", "Gamma");
+    write(&gamma, ".git", "gitdir: ../alpha/.git/worktrees/gamma\n");
+    let replies = exchange(&ws, &[&call("aval_resolve", r#"{"key":"a.b"}"#)]);
+    let (map, _) = tool_result(&replies[0]);
+    assert_eq!(repo_names(map), ["alpha", "beta"], "{}", map);
+    assert_eq!(
+        map.get("worktrees_excluded")
+            .and_then(|x| x.get("gamma"))
+            .and_then(|p| p.as_str()),
+        Some("alpha")
+    );
+}
+
+#[test]
+fn a_worktree_whose_parent_is_not_discovered_stays_in_the_map() {
+    // Exclusion is about duplication. A worktree of a repository that is not
+    // itself listed is the only representative of that repository.
+    let ws = workspace("worktree-orphan");
+    fs::create_dir_all(ws.join("outside")).unwrap();
+    let gamma = child(&ws, "gamma", "Gamma");
+    write(
+        &gamma,
+        ".git",
+        &format!("gitdir: {}/outside/.git/worktrees/gamma\n", ws.display()),
+    );
+
+    let replies = exchange(&ws, &[&call("aval_resolve", r#"{"key":"a.b"}"#)]);
+    let (map, _) = tool_result(&replies[0]);
+    assert_eq!(repo_names(map), ["alpha", "beta", "gamma"], "{}", map);
+    assert_eq!(map.get("worktrees_excluded"), Some(&Json::obj()));
+
+    let r = repos_tool(&ws);
+    let g = r
+        .get("repos")
+        .and_then(|a| a.as_arr())
+        .unwrap()
+        .iter()
+        .find(|x| x.get("name").and_then(|n| n.as_str()) == Some("gamma"))
+        .unwrap();
+    let wt = g.get("worktree").expect("worktree");
+    assert!(
+        wt.get("parent").map(Json::is_null).unwrap_or(false),
+        "{}",
+        g
+    );
+    assert_eq!(
+        wt.get("parent_root").and_then(|p| p.as_str()),
+        Some(canon(&ws.join("outside")).as_str())
+    );
+}
+
+#[test]
+fn a_submodule_is_a_repo_of_its_own() {
+    // `.git` is a file for a submodule too, pointing at `.git/modules/`. That
+    // is a repository in its own right, not a branch of another.
+    let ws = workspace("submodule");
+    let gamma = child(&ws, "gamma", "Gamma");
+    write(&gamma, ".git", "gitdir: ../.git/modules/gamma\n");
+    let replies = exchange(&ws, &[&call("aval_resolve", r#"{"key":"a.b"}"#)]);
+    let (map, _) = tool_result(&replies[0]);
+    assert_eq!(repo_names(map), ["alpha", "beta", "gamma"], "{}", map);
+    let r = repos_tool(&ws);
+    let g = r
+        .get("repos")
+        .and_then(|a| a.as_arr())
+        .unwrap()
+        .iter()
+        .find(|x| x.get("name").and_then(|n| n.as_str()) == Some("gamma"))
+        .unwrap();
+    assert!(
+        g.get("worktree").map(Json::is_null).unwrap_or(false),
+        "{}",
+        g
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn two_names_for_one_root_appear_once() {
+    let ws = workspace("dedupe");
+    std::os::unix::fs::symlink(ws.join("beta"), ws.join("beta-link")).unwrap();
+    let replies = exchange(&ws, &[&call("aval_resolve", r#"{"key":"a.b"}"#)]);
+    let (map, _) = tool_result(&replies[0]);
+    assert_eq!(repo_names(map), ["alpha", "beta"], "{}", map);
+    let r = repos_tool(&ws);
+    let skipped = r.get("skipped").and_then(|s| s.as_arr()).unwrap();
+    assert_eq!(skipped.len(), 1, "{}", r);
+    assert_eq!(
+        skipped[0].get("name").and_then(|n| n.as_str()),
+        Some("beta-link")
+    );
+    let reason = skipped[0]
+        .get("reason")
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    assert!(reason.contains("same directory as `beta`"), "{}", reason);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_child_is_skipped_with_its_reason() {
+    let ws = workspace("skipped");
+    // A registry that is a directory, not a file.
+    fs::create_dir_all(ws.join("delta").join(".adr.yaml")).unwrap();
+    // A dangling symlink where a repository might be.
+    std::os::unix::fs::symlink(ws.join("nowhere"), ws.join("epsilon")).unwrap();
+    // A plain file at depth one is simply not a repository — not a skip.
+    write(&ws, "README.md", "# ws\n");
+
+    let replies = exchange(&ws, &[&call("aval_resolve", r#"{"key":"a.b"}"#)]);
+    let (map, _) = tool_result(&replies[0]);
+    assert_eq!(repo_names(map), ["alpha", "beta"], "{}", map);
+    let r = repos_tool(&ws);
+    let skipped = r.get("skipped").and_then(|s| s.as_arr()).unwrap();
+    let names: Vec<&str> = skipped
+        .iter()
+        .filter_map(|s| s.get("name").and_then(|n| n.as_str()))
+        .collect();
+    assert_eq!(names, ["delta", "epsilon"], "{}", r);
+    assert!(skipped[0]
+        .get("reason")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .contains("not a regular file"));
+}
+
+#[test]
+fn one_broken_corpus_keeps_is_error_false() {
+    let ws = workspace("one-broken");
+    write(
+        &ws.join("beta"),
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [\nkeys:\n  a.b:\n",
+    );
+    let replies = exchange(&ws, &[&call("aval_resolve", r#"{"key":"a.b"}"#)]);
+    let (map, is_err) = tool_result(&replies[0]);
+    assert!(!is_err, "a partial answer is an answer: {}", map);
+    assert_eq!(state(member(map, "alpha")), "active");
+    assert_eq!(member(map, "beta").get("ok"), Some(&Json::Bool(false)));
+    assert_eq!(
+        member(map, "beta").get("exit").and_then(|e| e.as_i64()),
+        Some(3)
+    );
+}
+
+#[test]
+fn every_corpus_broken_is_is_error_true() {
+    let ws = workspace("all-broken");
+    for n in ["alpha", "beta"] {
+        write(
+            &ws.join(n),
+            ".adr.yaml",
+            "dir: docs/adr\nscopes: [\nkeys:\n  a.b:\n",
+        );
+    }
+    let replies = exchange(&ws, &[&call("aval_resolve", r#"{"key":"a.b"}"#)]);
+    let (map, is_err) = tool_result(&replies[0]);
+    assert!(is_err, "no member answered anything: {}", map);
+    assert_eq!(repo_names(map), ["alpha", "beta"]);
+}
+
+#[test]
+fn zero_corpora_names_children_in_its_message() {
+    let ws = ws_scratch("empty");
+    fs::create_dir_all(ws.join("just-a-dir")).unwrap();
+    let replies = exchange(&ws, &[&call("aval_resolve", r#"{"key":"a.b"}"#)]);
+    let (p, is_err) = tool_result(&replies[0]);
+    assert!(is_err);
+    let e = p.get("error").and_then(|x| x.as_str()).unwrap_or("");
+    assert!(e.contains("any child directory"), "{}", e);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_launch_dir_is_reported_not_empty() {
+    use std::os::unix::fs::PermissionsExt;
+    let ws = workspace("unreadable-launch");
+    struct Restore(PathBuf);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+        }
+    }
+    let _restore = Restore(ws.clone());
+    fs::set_permissions(&ws, fs::Permissions::from_mode(0o100)).unwrap();
+    let replies = exchange(&ws, &[&call("aval_resolve", r#"{"key":"a.b"}"#)]);
+    let (p, is_err) = tool_result(&replies[0]);
+    assert!(is_err);
+    let e = p.get("error").and_then(|x| x.as_str()).unwrap_or("");
+    assert!(
+        e.contains("ermission"),
+        "a permissions failure must not read as an empty workspace: {}",
+        e
+    );
+    assert!(!e.contains("any child directory"), "{}", e);
+}
+
+#[test]
+fn aval_show_without_repo_is_a_protocol_error() {
+    let ws = workspace("show-needs-repo");
+    let replies = exchange(&ws, &[&call("aval_show", r#"{"record":"ADR-0001"}"#)]);
+    assert_eq!(err_code(&replies[0]), -32602);
+    let m = replies[0]
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .unwrap_or("");
+    assert!(m.contains("needs `repo`"), "{}", m);
+    // With one named, it is the ordinary single answer.
+    let one = &exchange(
+        &ws,
+        &[&call("aval_show", r#"{"record":"ADR-0001","repo":"beta"}"#)],
+    )[0];
+    let (p, is_err) = tool_result(one);
+    assert!(!is_err);
+    assert_eq!(p.get("adr").and_then(|a| a.as_str()), Some("ADR-0001"));
+}
+
+fn resource_uris(dir: &Path) -> Vec<String> {
+    let replies = exchange(
+        dir,
+        &[r#"{"jsonrpc":"2.0","id":1,"method":"resources/list"}"#],
+    );
+    result(&replies[0])
+        .get("resources")
+        .and_then(|x| x.as_arr())
+        .expect("resources")
+        .iter()
+        .filter_map(|x| x.get("uri").and_then(|u| u.as_str()).map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn resources_list_grows_a_pair_per_repo_and_drops_the_bare_uris() {
+    let ws = workspace("resources");
+    let uris = resource_uris(&ws);
+    assert!(uris.contains(&"aval://repos".to_string()), "{:?}", uris);
+    assert!(
+        uris.contains(&"aval://alpha/heads".to_string()),
+        "{:?}",
+        uris
+    );
+    assert!(uris.contains(&"aval://beta/keys".to_string()), "{:?}", uris);
+    // The bare URIs name the launch directory's own corpus; there is none.
+    assert!(!uris.contains(&"aval://heads".to_string()), "{:?}", uris);
+    let bare = exchange(
+        &ws,
+        &[r#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"aval://heads"}}"#],
+    );
+    assert_eq!(err_code(&bare[0]), -32602);
+
+    // From inside a corpus, the old surface exactly.
+    let inside = resource_uris(&ws.join("alpha"));
+    assert!(inside.contains(&"aval://heads".to_string()), "{:?}", inside);
+    assert!(inside.contains(&"aval://repos".to_string()), "{:?}", inside);
+    assert!(
+        !inside
+            .iter()
+            .any(|u| u.contains("/heads") && u != "aval://heads"),
+        "{:?}",
+        inside
+    );
+
+    // A per-repo read is that repo's heads, byte for byte.
+    let read = &exchange(
+        &ws,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"aval://beta/heads"}}"#,
+        ],
+    )[0];
+    let text = result(read)
+        .get("contents")
+        .and_then(|c| c.as_arr())
+        .unwrap()[0]
+        .get("text")
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
+    assert_eq!(text, cli(&ws.join("beta"), &["heads", "--json"]).trim());
+}
+
+#[test]
+fn a_resource_name_with_reserved_and_unicode_characters_round_trips() {
+    let ws = workspace("encoded-name");
+    let odd = "sp ace#1%?résumé";
+    child(&ws, odd, "Odd");
+    let uris = resource_uris(&ws);
+    let want = "aval://sp%20ace%231%25%3Fr%C3%A9sum%C3%A9/heads";
+    assert!(uris.contains(&want.to_string()), "{:?}", uris);
+    let read = &exchange(
+        &ws,
+        &[&format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{{"uri":"{}"}}}}"#,
+            want
+        )],
+    )[0];
+    let c = &result(read)
+        .get("contents")
+        .and_then(|c| c.as_arr())
+        .unwrap()[0];
+    assert_eq!(c.get("uri").and_then(|u| u.as_str()), Some(want));
+    let text = c.get("text").and_then(|t| t.as_str()).unwrap_or("");
+    assert!(text.contains(r#""choice":"Odd""#), "{}", text);
+    // And the same name works as a `repo` argument, undecoded.
+    let one = &exchange(
+        &ws,
+        &[&call(
+            "aval_resolve",
+            &format!(r#"{{"key":"a.b","repo":"{}"}}"#, odd),
+        )],
+    )[0];
+    assert_eq!(
+        tool_result(one).0.get("choice").and_then(|c| c.as_str()),
+        Some("Odd")
+    );
+}
+
+#[test]
+fn discovery_is_fresh_per_call() {
+    let ws = workspace("fresh");
+    let mut s = Server::start(&ws);
+    let ask = |s: &mut Server, id: u32| -> Json {
+        s.send_raw(&format!(
+            "{}\n",
+            call_id(id, "aval_resolve", r#"{"key":"a.b"}"#)
+        ));
+        let r = s.reply();
+        assert_eq!(r.get("id").and_then(|i| i.as_i64()), Some(id as i64));
+        r
+    };
+    let two = ask(&mut s, 1);
+    assert_eq!(repo_names(tool_result(&two).0), ["alpha", "beta"]);
+
+    child(&ws, "gamma", "Gamma");
+    let three = ask(&mut s, 2);
+    assert_eq!(
+        repo_names(tool_result(&three).0),
+        ["alpha", "beta", "gamma"]
+    );
+
+    fs::remove_dir_all(ws.join("gamma")).unwrap();
+    let back = ask(&mut s, 3);
+    assert_eq!(repo_names(tool_result(&back).0), ["alpha", "beta"]);
+
+    // The launch directory becomes a corpus: the next call answers as it.
+    child(&ws, ".", "Root");
+    let single = ask(&mut s, 4);
+    let (p, _) = tool_result(&single);
+    assert!(
+        p.get("repos").is_none(),
+        "walk-up wins once a registry exists: {}",
+        p
+    );
+    assert_eq!(p.get("choice").and_then(|c| c.as_str()), Some("Root"));
+
+    fs::remove_file(ws.join(".adr.yaml")).unwrap();
+    let again = ask(&mut s, 5);
+    assert_eq!(repo_names(tool_result(&again).0), ["alpha", "beta"]);
+    assert!(s.finish().is_empty());
 }
