@@ -15,6 +15,23 @@ says: a caller may pin `1` and expect the verdicts, their exit codes, the
 note strings, the `--json` field names and the frontmatter dialect to
 hold. §15 lists exactly what that covers and what it does not.
 
+### Upgrading
+
+- **Bumping a repository's aval pin now needs `aval hook install` in the
+  same commit.** The hook's preamble changed — it says the heads table is
+  data rather than instruction, and names the MCP tools — and the script's
+  own bytes are its version, so a repository that moves to 1.0.0 while
+  carrying a hook written by an older one fails its own
+  `aval hook install --check` step.
+
+  This is the same coupling `aval.pack` has, and it fails the same way:
+  one half moved and the other did not. A repository that stays on its
+  current pin is unaffected, which is why nothing broke when 1.0.0 was
+  published.
+
+- A repository that publishes `aval.pack` must regenerate it, as at every
+  release: the pack records the version that wrote it.
+
 ### Added
 
 - **`aval://heads` and `aval://keys` as MCP resources.** A resource is
