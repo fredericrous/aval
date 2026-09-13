@@ -102,9 +102,11 @@ Nothing on that surface writes. Resolving answers a question; deciding is not
 something to do on an agent's behalf.
 
 **From the parent of all your projects**, where there is no corpus above and
-several below, the same server is a **workspace**: every tool takes `repo` to
-name one, and without it answers for all of them at once — a map keyed by
-name, which is the cross-repository question in a single call.
+several below, the same server is a **workspace**: every tool takes `repo` to name one.
+`resolve` and `history` answer for all of them when it is omitted — a map
+keyed by name, which is the cross-repository question in a single call —
+while `keys`, `heads` and `show` ask for a name, because every repository's
+heads at once is a lot of context to fetch by forgetting an argument.
 `aval repos` says what was found, and `--all-repos` renders the same map from
 the shell:
 

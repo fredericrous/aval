@@ -15,11 +15,15 @@ corpora one level down and answers for them.
   scans its direct children; each that carries a `.adr.yaml` is a
   repository, named by its directory. Every tool takes an optional
   `repo`. Named, it answers for that corpus alone, byte-equal to that
-  repository's own `--json`. Omitted, `aval_resolve`, `aval_keys`,
-  `aval_heads` and `aval_history` answer for every repository at once —
-  a map keyed by name, which is the cross-repository question answered
-  in one call. `aval_show` requires `repo`: record ids are corpus-local,
-  and "show `ADR-0001`" across nine repositories is under-specified.
+  repository's own `--json`. Omitted, `aval_resolve` and `aval_history` answer for every repository
+  at once — a map keyed by name, which is the cross-repository question
+  answered in one call. `aval_show` requires `repo`: record ids are
+  corpus-local, and "show `ADR-0001`" across nine repositories is
+  under-specified. `aval_keys` and `aval_heads` require it too: every
+  repository's heads at once is tens of kilobytes of context, and a
+  forgotten name must be an error listing the options, not that by
+  accident. The CLI's `--all-repos` renders all four; a flag is an
+  explicit ask.
 
   The map is a report, not a verdict (§14.1). `isError` is true only
   when no member answered anything; a member that would not load stands
