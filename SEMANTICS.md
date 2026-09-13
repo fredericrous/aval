@@ -992,8 +992,7 @@ deduplicated by canonical root, and both are load-bearing for §12.
 
 In a workspace every tool accepts `repo`, a directory name. Named, a tool
 answers for that corpus alone, and the payload is byte-equal to that
-repository's own `--json`. Omitted, `aval_resolve`, `aval_keys`, `aval_heads`
-and `aval_history` answer for every repository at once:
+repository's own `--json`. Omitted, `aval_resolve` and `aval_history` answer for every repository at once:
 
 ```json
 { "repos": { "<name>": { …that repository's own payload… }, … },
@@ -1013,6 +1012,14 @@ corpus the map has one member; the shape never depends on the count.
 `ADR-0001` exists in every repository and "show it" across a workspace is
 under-specified rather than unanswered — a protocol error naming the
 repositories, not eight near-misses reported as answers.
+
+`aval_keys` and `aval_heads` need `repo` too, for a different reason. A tool
+result is paid for in context, every repository's heads at once is tens of
+kilobytes, and a caller that forgot the name must get a protocol error listing
+the options rather than that payload by accident. The map is handed out from
+the tool surface only where it is small and is the actual question. The CLI's
+`--all-repos` renders all four: a flag is an explicit ask, and a terminal reads
+nothing into a context window.
 
 **A linked worktree is left out of the map only when its parent is in it.**
 The exclusion is about duplication — the same corpus would otherwise answer

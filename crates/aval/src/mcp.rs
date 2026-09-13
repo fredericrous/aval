@@ -216,9 +216,10 @@ const SCOPE_ARG: &str = "The scope to ask at, e.g. `homelab`. Omit for the \
      the default.";
 const REPO_ARG: &str = "Which repository, by directory name, when the server \
      was started in a WORKSPACE — a directory with no corpus of its own above \
-     several that have one. Omit to ask the launch directory's own corpus, or, \
-     in a workspace, to ask every repository at once and get a map keyed by \
-     name. aval_repos lists what there is.";
+     several that have one. Omit to ask the launch directory's own corpus. In \
+     a workspace, aval_resolve and aval_history answer for every repository \
+     when it is omitted, as a map keyed by name; aval_keys, aval_heads and \
+     aval_show require it. aval_repos lists what there is.";
 
 fn tools() -> Vec<Json> {
     let repo = ("repo", prop("string", REPO_ARG));
@@ -256,8 +257,8 @@ fn tools() -> Vec<Json> {
              only an exact key resolves.\n\n\
              `scopes: null` means every declared scope; `[]` means fleet-wide \
              only. `detail: \"full\"` adds where each key is already decided, at \
-             roughly twice the size. In a workspace with no `repo`: a map of \
-             every repository's vocabulary.",
+             roughly twice the size. In a workspace `repo` is required: name one, \
+             or read the `aval://<repo>/keys` resource.",
             schema(
                 vec![
                     (
@@ -283,8 +284,9 @@ fn tools() -> Vec<Json> {
              as `contradiction`, where the projection omits it and so reads as \
              though nothing were decided. Also a resource — `aval://heads` in a \
              corpus, `aval://<repo>/heads` in a workspace — which a client can \
-             attach once instead of calling this. In a workspace with no `repo`: \
-             every repository's heads at once, which is large; prefer naming one.",
+             attach once instead of calling this. In a workspace `repo` is \
+             required: every repository's heads at once is large, and a forgotten \
+             name must not fetch it by accident.",
             schema(vec![repo.clone()], vec![]),
         ),
         tool(
@@ -314,7 +316,8 @@ fn tools() -> Vec<Json> {
             "How a slot reached its current answer, oldest first.\n\n\
              HISTORY, NOT AUTHORITY. A record in this chain that is not the head \
              has been replaced, and citing it as current is the mistake this \
-             corpus exists to prevent. For what holds now, call aval_resolve.",
+             corpus exists to prevent. For what holds now, call aval_resolve. In \
+             a workspace with no `repo`: every repository's chain, keyed by name.",
             schema(
                 vec![
                     ("key", prop("string", KEY_ARG)),
@@ -330,9 +333,10 @@ fn tools() -> Vec<Json> {
              is or is not answering.\n\n\
              `mode` is `corpus` — a registry above the launch directory answers \
              as itself — or `workspace` — none above, so the corpora one level \
-             down answer, each addressable by `repo` and all at once when it is \
-             omitted. A `worktree` entry names the repository it is a branch of; \
-             a worktree whose parent is also listed is left out of all-at-once \
+             down answer, each addressable by `repo`; resolve and history answer \
+             for all of them when it is omitted, keys, heads and show require \
+             one. A `worktree` entry names the repository it is a branch of; a \
+             worktree whose parent is also listed is left out of all-at-once \
              answers so the same corpus does not answer twice. `shadowed` marks a \
              corpus beneath an active one. `skipped` names directories that \
              looked like a corpus and could not be used, with the reason.",
@@ -694,12 +698,27 @@ fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
             // Record ids are local to a corpus (SEMANTICS section 3.8): the
             // same `ADR-0001` exists in every repository, so "show it" across
             // a workspace is under-specified rather than unanswered.
-            if let Ask::Show(_) = ask {
+            // Heads and keys need one for a different reason: every
+            // repository's at once is tens of kilobytes, a tool result is paid
+            // for in context, and a caller that forgot `repo` must get a
+            // protocol error naming the options — not that payload by
+            // accident. The map is handed out only where it is small and is
+            // the actual question: "what does each repository say about X".
+            // The CLI's --all-repos still renders all four; a flag is an
+            // explicit ask, and a terminal reads nothing into a context.
+            let needs_one = match ask {
+                Ask::Show(_) => Some("aval_show"),
+                Ask::Heads => Some("aval_heads"),
+                Ask::Keys(_) => Some("aval_keys"),
+                Ask::Resolve { .. } | Ask::History { .. } => None,
+            };
+            if let Some(tool) = needs_one {
                 return error(
                     id,
                     INVALID_PARAMS,
                     &format!(
-                        "`aval_show` needs `repo` in a workspace; this one has: {}",
+                        "`{}` needs `repo` in a workspace; this one has: {}",
+                        tool,
                         names(&repos)
                     ),
                 );

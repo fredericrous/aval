@@ -912,7 +912,9 @@ fn each_inner_payload_is_byte_equal_to_that_repos_cli() {
 #[test]
 fn the_map_is_byte_equal_to_all_repos_on_the_cli() {
     // The CLI can produce the map itself, so the parity test covers its
-    // ordering, keys and exclusions — not only the members inside it.
+    // ordering, keys and exclusions — not only the members inside it. Only
+    // resolve and history hand it out from the tool surface: every
+    // repository's heads or keys at once is large, and needs `repo` there.
     let ws = workspace("map-parity");
     for (tool, args, cli_args) in [
         (
@@ -920,12 +922,6 @@ fn the_map_is_byte_equal_to_all_repos_on_the_cli() {
             r#"{"key":"a.b"}"#,
             vec!["resolve", "a.b", "--all-repos", "--json"],
         ),
-        (
-            "aval_keys",
-            "{}",
-            vec!["keys", "--names", "--all-repos", "--json"],
-        ),
-        ("aval_heads", "{}", vec!["heads", "--all-repos", "--json"]),
         (
             "aval_history",
             r#"{"key":"a.b"}"#,
@@ -940,6 +936,26 @@ fn the_map_is_byte_equal_to_all_repos_on_the_cli() {
             tool
         );
     }
+    // Named, keys and heads are byte-equal to that repository's own CLI.
+    for (tool, args, cli_args) in [
+        (
+            "aval_keys",
+            r#"{"repo":"beta"}"#,
+            vec!["keys", "--names", "--json"],
+        ),
+        ("aval_heads", r#"{"repo":"beta"}"#, vec!["heads", "--json"]),
+    ] {
+        let reply = &exchange(&ws, &[&call(tool, args)])[0];
+        assert_eq!(
+            content(reply, 0).trim(),
+            cli(&ws.join("beta"), &cli_args).trim(),
+            "{}",
+            tool
+        );
+    }
+    // And the CLI still renders all four for a terminal that asked with a flag.
+    assert!(cli(&ws, &["heads", "--all-repos", "--json"]).starts_with(r#"{"repos":{"alpha":"#));
+    assert!(cli(&ws, &["keys", "--all-repos", "--json"]).starts_with(r#"{"repos":{"alpha":"#));
 }
 
 #[test]
@@ -1339,17 +1355,31 @@ fn an_unreadable_launch_dir_is_reported_not_empty() {
 }
 
 #[test]
-fn aval_show_without_repo_is_a_protocol_error() {
-    let ws = workspace("show-needs-repo");
-    let replies = exchange(&ws, &[&call("aval_show", r#"{"record":"ADR-0001"}"#)]);
-    assert_eq!(err_code(&replies[0]), -32602);
-    let m = replies[0]
-        .get("error")
-        .and_then(|e| e.get("message"))
-        .and_then(|m| m.as_str())
-        .unwrap_or("");
-    assert!(m.contains("needs `repo`"), "{}", m);
-    // With one named, it is the ordinary single answer.
+fn show_keys_and_heads_need_a_repo_in_a_workspace() {
+    // Ids are corpus-local, so `show` is under-specified without one. Keys and
+    // heads are refused for cost: every repository's at once is tens of
+    // kilobytes, and a forgotten `repo` must be a named error, not that.
+    let ws = workspace("needs-repo");
+    for (tool, args) in [
+        ("aval_show", r#"{"record":"ADR-0001"}"#),
+        ("aval_keys", "{}"),
+        ("aval_heads", "{}"),
+    ] {
+        let replies = exchange(&ws, &[&call(tool, args)]);
+        assert_eq!(err_code(&replies[0]), -32602, "{}", tool);
+        let m = replies[0]
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("");
+        assert!(
+            m.contains("needs `repo`") && m.contains("alpha, beta"),
+            "{}: {}",
+            tool,
+            m
+        );
+    }
+    // With one named, the ordinary single answer.
     let one = &exchange(
         &ws,
         &[&call("aval_show", r#"{"record":"ADR-0001","repo":"beta"}"#)],
@@ -1357,6 +1387,9 @@ fn aval_show_without_repo_is_a_protocol_error() {
     let (p, is_err) = tool_result(one);
     assert!(!is_err);
     assert_eq!(p.get("adr").and_then(|a| a.as_str()), Some("ADR-0001"));
+    // And resolve still answers for all: the map stays where it is small.
+    let all = &exchange(&ws, &[&call("aval_resolve", r#"{"key":"a.b"}"#)])[0];
+    assert_eq!(repo_names(tool_result(all).0), ["alpha", "beta"]);
 }
 
 fn resource_uris(dir: &Path) -> Vec<String> {
