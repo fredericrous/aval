@@ -516,3 +516,48 @@ fn history_json_answers_an_unknown_key_instead_of_staying_silent() {
     assert_eq!(scope.code, 7, "{}{}", scope.out, scope.err);
     assert!(scope.out.contains(r#""unknown":"scope""#), "{}", scope.out);
 }
+
+#[test]
+fn a_value_that_would_read_differently_to_a_model_is_refused() {
+    // This text is printed into an agent's context by the session-start hook
+    // and by `aval mcp`. A bidi override or a control character makes what a
+    // reviewer reads in the pull request differ from what the model receives,
+    // and the pull request is the gate section 2.3 relies on.
+    let r = scratch("printable-values");
+    write(&r, ".adr.yaml", REGISTRY);
+    write(
+        &r,
+        "docs/adr/0001-one.md",
+        "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  \
+         - key: a.b\n    choice: \"One\u{202E}ereher\"\n    first: true\n---\n# one\n",
+    );
+    let got = run(&r, &["check"]);
+    assert_eq!(got.code, 3, "{}{}", got.out, got.err);
+    assert!(got.err.contains("U+202E"), "{}", got.err);
+
+    // Ordinary text with punctuation, accents and symbols stays valid.
+    write(
+        &r,
+        "docs/adr/0001-one.md",
+        "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  \
+         - key: a.b\n    choice: \"Ceph RGW — S3, façade «x» 100%\"\n    first: true\n---\n# one\n",
+    );
+    assert_eq!(run(&r, &["heads", "--write"]).code, 0);
+    let ok = run(&r, &["check"]);
+    assert_eq!(ok.code, 0, "{}{}", ok.out, ok.err);
+}
+
+#[test]
+fn keys_names_omits_where_each_is_decided() {
+    let r = scratch("keys-names");
+    write(&r, ".adr.yaml", REGISTRY);
+    write(&r, "docs/adr/0001-one.md", NUMBERED);
+
+    let full = run(&r, &["keys", "--json"]);
+    assert!(full.out.contains(r#""decided""#), "{}", full.out);
+    let names = run(&r, &["keys", "--names", "--json"]);
+    assert_eq!(names.code, 0, "{}{}", names.out, names.err);
+    assert!(!names.out.contains(r#""decided""#), "{}", names.out);
+    assert!(names.out.contains(r#""key":"a.b""#), "{}", names.out);
+    assert!(names.out.len() < full.out.len());
+}

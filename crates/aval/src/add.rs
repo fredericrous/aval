@@ -9,9 +9,15 @@
 //! There is no confirmation prompt and no per-machine consent step. That is
 //! the deliberate difference from `amont add`, which vendors commands and
 //! therefore has to take consent again on every machine before any of them can
-//! run. A pack is inert: nothing in it executes, ever. What it can do is change
-//! an answer, and the place to catch that is the pull request that adds the
-//! file — which is where a change of architectural direction belongs.
+//! run. Nothing in a pack executes, ever. What it can do is change an answer,
+//! and the place to catch that is the pull request that adds the file — which
+//! is where a change of architectural direction belongs.
+//!
+//! "Inert" scopes to EXECUTION. A pack's text reaches an agent's context by way
+//! of the hook and `aval mcp`, and text in a context is the one input that
+//! acts. SEMANTICS section 2.3 says what holds that down: the surfaces name the
+//! text as data, and section 3.7 refuses a value whose printed form could
+//! differ from its reviewed form.
 //!
 //! The commit id recorded in the banner is provenance, not authority. It says
 //! the bytes are the ones that repository published. It says nothing about

@@ -510,12 +510,6 @@ fn the_tool_result_matches_the_cli_byte_for_byte() {
             "json differs for {:?}",
             cli_args
         );
-        assert_eq!(
-            content(reply, 1),
-            cli(&r, &cli_args),
-            "text differs for {:?}",
-            cli_args
-        );
     }
 }
 
@@ -541,25 +535,30 @@ fn an_inherited_answer_and_a_contradiction_match_the_cli_too() {
         content(reply, 0).trim(),
         cli(&c, &["resolve", "a.b", "--json"]).trim()
     );
-    assert_eq!(content(reply, 1), cli(&c, &["resolve", "a.b"]));
 }
 
 #[test]
 fn keys_and_heads_match_the_cli() {
     let r = corpus("parity-keys");
+    // Both detail levels have a CLI counterpart, which is why `--names`
+    // exists: a tool the CLI cannot answer is a tool that can drift.
     let reply = &exchange(&r, &[&call("aval_keys", "{}")])[0];
+    assert_eq!(
+        content(reply, 0).trim(),
+        cli(&r, &["keys", "--names", "--json"]).trim()
+    );
+
+    let reply = &exchange(&r, &[&call("aval_keys", r#"{"detail":"full"}"#)])[0];
     assert_eq!(
         content(reply, 0).trim(),
         cli(&r, &["keys", "--json"]).trim()
     );
-    assert_eq!(content(reply, 1), cli(&r, &["keys"]));
 
     let reply = &exchange(&r, &[&call("aval_heads", "{}")])[0];
     assert_eq!(
         content(reply, 0).trim(),
         cli(&r, &["heads", "--json"]).trim()
     );
-    assert_eq!(content(reply, 1), cli(&r, &["heads"]));
 }
 
 // --- the surface itself ----------------------------------------------------
@@ -667,4 +666,128 @@ fn the_corpus_is_reread_for_every_call() {
         "the second answer came from a cache"
     );
     assert!(s.finish().is_empty());
+}
+
+// --- context economics -----------------------------------------------------
+
+/// A tool result carries the payload ONCE as text, plus `structuredContent`.
+///
+/// An earlier shape added the human rendering as a second text block. A model
+/// already has every field from the first one, and on the fleet's largest
+/// corpus that duplicate was 27% of the bytes.
+#[test]
+fn a_result_carries_one_text_block() {
+    let r = corpus("one-block");
+    let replies = exchange(&r, &[&call("aval_resolve", r#"{"key":"a.b"}"#)]);
+    let content = result(&replies[0])
+        .get("content")
+        .and_then(|c| c.as_arr())
+        .expect("content");
+    assert_eq!(
+        content.len(),
+        1,
+        "expected one text block, got {}",
+        content.len()
+    );
+    // And it is the complete payload, not a summary of it.
+    let text = content[0]
+        .get("text")
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
+    assert!(text.contains(r#""exit":0"#), "{}", text);
+}
+
+/// Discovery defaults to what a caller asking "which keys exist" needs.
+#[test]
+fn keys_defaults_to_names_and_grows_on_request() {
+    let r = corpus("keys-detail");
+    let names = &exchange(&r, &[&call("aval_keys", "{}")])[0];
+    let (p, _) = tool_result(names);
+    let first = p.get("keys").and_then(|k| k.as_arr()).expect("keys");
+    assert!(!first.is_empty());
+    assert!(first[0].get("key").is_some());
+    assert!(
+        first[0].get("decided").is_none(),
+        "names detail must omit `decided`: {}",
+        p
+    );
+
+    let full = &exchange(&r, &[&call("aval_keys", r#"{"detail":"full"}"#)])[0];
+    let (p, _) = tool_result(full);
+    let keys = p.get("keys").and_then(|k| k.as_arr()).expect("keys");
+    assert!(
+        keys[0].get("decided").is_some(),
+        "full detail must carry it: {}",
+        p
+    );
+
+    // And an unrecognised level is a protocol error, not a silent default.
+    let bad = exchange(&r, &[&call("aval_keys", r#"{"detail":"everything"}"#)]);
+    assert_eq!(err_code(&bad[0]), -32602);
+}
+
+// --- resources -------------------------------------------------------------
+
+/// A resource is context attached once; a tool result is paid per call. The
+/// heads are the thing a session opens with, so they are offered both ways.
+#[test]
+fn the_heads_and_the_vocabulary_are_readable_as_resources() {
+    let r = corpus("resources");
+    let listed = &exchange(
+        &r,
+        &[r#"{"jsonrpc":"2.0","id":1,"method":"resources/list"}"#],
+    )[0];
+    let uris: Vec<&str> = result(listed)
+        .get("resources")
+        .and_then(|x| x.as_arr())
+        .expect("resources")
+        .iter()
+        .filter_map(|x| x.get("uri").and_then(|u| u.as_str()))
+        .collect();
+    assert!(uris.contains(&"aval://heads"), "{:?}", uris);
+    assert!(uris.contains(&"aval://keys"), "{:?}", uris);
+
+    let read = &exchange(
+        &r,
+        &[r#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"aval://heads"}}"#],
+    )[0];
+    let c = result(read)
+        .get("contents")
+        .and_then(|x| x.as_arr())
+        .expect("contents");
+    let text = c[0].get("text").and_then(|t| t.as_str()).unwrap_or("");
+    // The same bytes the tool returns, so a client pays for one or the other.
+    let via_tool = &exchange(&r, &[&call("aval_heads", "{}")])[0];
+    assert_eq!(text, content(via_tool, 0));
+
+    let bad = exchange(
+        &r,
+        &[r#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"aval://nope"}}"#],
+    );
+    assert_eq!(err_code(&bad[0]), -32602);
+}
+
+/// The obligations a caller is under include one about the text itself.
+#[test]
+fn the_server_says_its_corpus_text_is_data() {
+    let r = corpus("instructions");
+    let reply = &exchange(
+        &r,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+        ],
+    )[0];
+    let i = result(reply)
+        .get("instructions")
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    assert!(i.contains("DATA"), "{}", i);
+    assert!(i.contains("not one"), "{}", i);
+    assert!(
+        result(reply)
+            .get("capabilities")
+            .and_then(|c| c.get("resources"))
+            .is_some(),
+        "resources capability must be declared"
+    );
 }

@@ -234,7 +234,7 @@ status twice — and a pack was checked where it was written.
 
 #### What a pack is not
 
-A pack is inert data. Nothing in it is executed, ever.
+**Nothing in a pack is executed.** No shell runs, no code loads.
 
 This is the deliberate divergence from `amont`, whose packs vendor shell
 commands and which therefore takes consent per machine, content-keyed, and
@@ -242,6 +242,27 @@ re-takes it whenever a single byte changes. That gate exists because running
 somebody else's command is the risk. Here, nothing runs. What a pack can do is
 change an answer, and the place to catch that is the pull request that adds the
 file — which is where a change of architectural direction belongs.
+
+**"Inert" scopes to execution, and no further.** A pack's text reaches an
+agent's context: the session-start hook prints it, and `aval mcp` returns it.
+Text in a model's context is not inert in the way a file on disk is — it is the
+one input that acts. So a pack is a path by which another repository's prose
+reaches a reader who was told, by this tool, that it is settled.
+
+Three things hold that down, and none of them is detection:
+
+1. The hook and the tool surface both state that a record's wording is **data**,
+   not instruction, and that text reading as an instruction should be reported
+   rather than followed.
+2. §3.7 rejects a value carrying a control character, a bidi override or an
+   embedded newline, so the text a reviewer reads in the pull request is the
+   text the model receives. That is the property review depends on.
+3. The pull request that adds or updates the pack is the gate, as above.
+
+Detecting instruction-shaped prose is deliberately **not** attempted. A pattern
+for it fails open, and a false positive on a legitimate `choice` would block a
+decision for looking wrong. Making the bytes reviewable and saying plainly what
+they are is the part that can be done correctly.
 
 The recorded commit id is **provenance, not authority**. It says the bytes are
 the ones that repository published. It says nothing about whether the decisions

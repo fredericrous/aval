@@ -374,22 +374,26 @@ fn key_pack<'a>(packs: &'a [Pack], key: &str) -> Option<&'a str> {
         .map(|p| p.name.as_str())
 }
 
-pub fn keys_json(g: &Graph, packs: &[Pack]) -> Json {
+/// How much of the vocabulary to report.
+///
+/// Discovery is the call a caller makes BECAUSE it does not know a key name,
+/// and on the fleet's largest corpus the full answer is 10.5 KB of which the
+/// names are 1 KB. `Names` is what that caller actually needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Detail {
+    /// Key, description, and the scopes it is answerable at.
+    Names,
+    /// Everything, including where each key is already decided.
+    Full,
+}
+
+pub fn keys_json(g: &Graph, packs: &[Pack], detail: Detail) -> Json {
     let reg = g.registry();
     let keys: Vec<Json> = reg
         .keys
         .iter()
         .map(|k| {
-            let decided: Vec<Json> = decided_at(g, &k.name)
-                .into_iter()
-                .map(|(scope, state, adrs)| {
-                    Json::obj()
-                        .set("scope", scope)
-                        .set("state", state)
-                        .set("adrs", adrs.iter().map(AdrId::as_str).collect::<Vec<_>>())
-                })
-                .collect();
-            Json::obj()
+            let row = Json::obj()
                 .set("key", k.name.as_str())
                 .set_opt("description", k.description.clone())
                 // `null` and `[]` are different and both are meaning-bearing:
@@ -404,8 +408,22 @@ pub fn keys_json(g: &Graph, packs: &[Pack]) -> Json {
                         }
                     },
                 )
-                .set_opt("pack", key_pack(packs, &k.name).map(|s| s.to_string()))
-                .set("decided", decided)
+                .set_opt("pack", key_pack(packs, &k.name).map(|s| s.to_string()));
+            match detail {
+                Detail::Names => row,
+                Detail::Full => {
+                    let decided: Vec<Json> = decided_at(g, &k.name)
+                        .into_iter()
+                        .map(|(scope, state, adrs)| {
+                            Json::obj()
+                                .set("scope", scope)
+                                .set("state", state)
+                                .set("adrs", adrs.iter().map(AdrId::as_str).collect::<Vec<_>>())
+                        })
+                        .collect();
+                    row.set("decided", decided)
+                }
+            }
         })
         .collect();
     Json::obj()
