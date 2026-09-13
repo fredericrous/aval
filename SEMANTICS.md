@@ -1,6 +1,6 @@
 # `aval` — normative semantics
 
-Version 0.7.0. This document is the specification. Where an
+Version 0.8.0. This document is the specification. Where an
 implementation and this document disagree, this document is right and the
 implementation is a bug.
 
@@ -464,6 +464,15 @@ Three rules that differ from YAML proper, each deliberate:
 
 Unknown fields are rejected too (§3.2). A misspelled `replacess:` that parsed
 into nothing would drop a supersession edge.
+
+A value MUST be **printable text**. A control character, a bidi override
+(`U+202A`–`U+202E`, `U+2066`–`U+2069`) or an embedded newline is a Layer A
+error reported with its line.
+
+The newline rule is §12.2's: a table row cannot carry one. The rest is §2.3's:
+these values are printed into an agent's context, so the text a reviewer reads
+in the pull request has to be the text the model receives. Both depend on the
+printed form and the reviewed form being the same bytes.
 
 ### 3.8 Identity
 
