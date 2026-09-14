@@ -2,6 +2,59 @@
 
 ## Unreleased
 
+## v1.3.0
+
+A vendored pack is now `.adr/packs/<name>.pack`, and whether it is still the
+pack the producer published is answered by comparing **declarations** rather
+than bytes.
+
+Both follow from the same mistake. A vendored pack lives in repositories whose
+pre-commit hook runs a formatter over every YAML file, and the first pack
+carrying a quoted word was rewritten by prettier in three consumers in one
+afternoon. 1.2.1 answered by emitting the quoting prettier would choose —
+which is the wrong layer, because a second formatter would disagree, and it
+defended a property that was never the point. What matters is that the
+reviewer reads in the pull request what the model receives, and that the
+vendored file declares what the producer published. Neither needs bytes. So
+the file takes an extension no formatter claims, the one the producer's own
+`aval.pack` already has, and equality is declarational the same way §12.2's
+freshness already was for `HEADS.md`.
+
+**Nothing to do.** The next `aval add` in each consumer moves the `.yaml` to
+`.pack` and rewrites the one registry line that names it; until then, the
+`.yaml` keeps loading, because a `packs:` entry is a literal path and nothing
+reads the extension. A repository that put `.adr/packs/` in its
+`.prettierignore` can drop the entry once that run has happened.
+
+### Added
+
+- **`.adr/packs/<name>.pack`.** `aval add` writes it, and migrates a
+  same-source `<name>.yaml` written by an earlier version: the file moves, the
+  registry line moves with it — textually, so every comment and every other
+  entry stays as it was written — and `--dry-run` reports the move without
+  making it. A `.yaml` carrying another source's banner, or no banner, is
+  still a collision and still stops the command.
+- **`edited`, a standing of `aval add --check`.** The revision still names the
+  recorded commit, and the vendored file no longer declares what that commit
+  published. Re-resolving alone never asked that, and what it missed is the
+  failure this tool exists to prevent, seen from the other side: a decision
+  this repository believes another one made, that nobody made. Counted with
+  `behind` (exit 1); `aval add` restores the file. Asked only of a pack that
+  is otherwise current — a behind one is being replaced anyway, an unknown one
+  cannot be fetched to compare against.
+- **`aval_core::yaml::same_values`.** Whether two documents declare the same
+  thing, ignoring line numbers, comments, quoting and blank lines. Sequences
+  compare in order; mappings by key set and value, because the dialect forbids
+  a duplicate key.
+
+### Changed
+
+- `aval add` reports `unchanged` by declaration rather than by byte, and
+  leaves such a file **exactly** as it is. Rewriting it would undo the
+  formatter on every run, which is the loop this release ends.
+- `pack --write`'s quoting is unchanged and is now a courtesy to formatters
+  rather than the thing holding a vendored file's identity together.
+
 ## v1.2.1
 
 A pack's quoting is now the style prettier would choose: double quotes,

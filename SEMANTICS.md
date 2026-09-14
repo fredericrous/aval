@@ -159,15 +159,32 @@ vendor another repository's declarations:
 
 ```yaml
 packs:
-  - .adr/packs/decisions.yaml
+  - .adr/packs/decisions.pack
 ```
 
 - Entries are **literal repository-relative paths**, for the reasons §2.2
   gives. A listed pack that is missing or unreadable is an error.
-- A pack file is written by `aval add` and MUST NOT be edited by hand. Its
-  content is the bytes the producing repository published, under a comment
-  banner naming the source, the revision asked for, and the commit id that
-  revision resolved to.
+- The vendored file's extension is **`.pack`**, the one the producing
+  repository's own published file carries. The reason is not taste: a consumer
+  runs a formatter over every YAML file it can name, and a formatter that
+  requotes a generated file turns it into a file that gets hand-edited.
+  `.pack` is claimed by no formatter. Nothing reads the extension — a `.yaml`
+  written by an earlier version keeps loading, so a listed path is never wrong
+  for its extension — and `aval add` migrates such a file, moving it and
+  rewriting the one registry line that names it.
+- A pack file is written by `aval add` and MUST NOT be edited by hand. What it
+  **declares** is what the producing repository published at the recorded
+  commit, under a comment banner naming the source, the revision asked for,
+  and the commit id that revision resolved to.
+
+  **Bytes are not the property.** Byte-equality was the wrong one: a file a
+  formatter rewrote had been edited by nobody and was unchanged for every
+  purpose this tool has, yet it compared unequal — so `add` rewrote it on
+  every run and a freshness check would have accused its author of an edit
+  they did not make. Comparison is of parsed values, ignoring line numbers,
+  comments, quoting and blank lines; the same move §12.2 makes for `HEADS.md`.
+  What "MUST NOT be edited by hand" forbids is changing what the file
+  *declares*, and `aval add --check` reports that as `edited`.
 - The **pack name** is the filename without its extension. It MUST satisfy the
   slug grammar of §3.8 and MUST NOT contain `:`. Two packs MUST NOT share a
   name. The name is carried in the path rather than in a second field, because
@@ -194,8 +211,8 @@ stacks until nothing names the record it refers to.
 #### Identity
 
 A vendored record is referred to as `<pack>:<id>`. Qualification happens when
-the pack is read, not when it is written, so the file on disk stays byte-equal
-to what the producer published.
+the pack is read, not when it is written, so the file on disk stays what the
+producer published, as declarations.
 
 Two repositories both numbering from `ADR-0001` is the ordinary case, not an
 edge case, and an unqualified collision would report `id-unique` against a
@@ -278,6 +295,17 @@ A vendored pack that is behind answers `active` with a decision that was
 superseded, which is the failure this tool exists to prevent. `aval add
 --check` re-resolves each recorded revision and reports whether it still names
 the recorded commit.
+
+It reports one more standing, `edited`: the revision still names the recorded
+commit, and the vendored file no longer declares what that commit published.
+Re-resolving alone never asked that question, and the answer it missed is the
+same failure from the other side — a decision this repository believes another
+one made, that nobody made. It is counted with `behind` because one command
+fixes both: `aval add` writes what the source published. The comparison is
+declarational, so a file a formatter reformatted is `current`, not `edited`.
+The check is asked only of a pack that is otherwise current: a `behind` pack is
+being replaced whatever its content says, and an `unknown` one cannot be
+fetched to compare against.
 
 It reaches the network, so **no hook, gate or `resolve` may call it**, and none
 does. A corpus that needed the network to answer a question would be useless
@@ -1091,7 +1119,7 @@ Low codes follow the duro CLI. Verdicts start at 4.
 | `aval pack --write` | A | `0` · `1` write failed · `2` · `3` |
 | `aval pack --check` | A + C | `0` fresh or not publishing · `1` stale · `2` · `3` |
 | `aval add` | A | `0` · `1` unreachable, ambiguous, or refused · `2` · `3` |
-| `aval add --check` | A | `0` current or unknown · `1` behind · `2` · `3` |
+| `aval add --check` | A | `0` current or unknown · `1` behind or edited · `2` · `3` |
 | `aval keys` | A | `0` · `2` · `3` |
 | `aval rules` | A | `0` · `2` · `3` |
 | `aval rule` | A | `0` found · `2` · `3` · `7` unknown |
@@ -1113,7 +1141,8 @@ describes the transport and nothing else.
 offline, moved, access lost. Being unable to ask is not an answer, and a
 verdict of "behind" that was really "I could not reach the remote" would teach
 its caller to ignore the one that matters. It says so in words and counts it
-separately.
+separately. `edited` is an answer and counts with `behind`; when both hold of
+one pack it reports `behind`, because re-vendoring settles both.
 
 `check` deliberately reports `1` for any finding regardless of layer, because
 its caller is a git hook, where amont's contract is that `0` passes and anything
