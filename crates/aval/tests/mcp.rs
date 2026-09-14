@@ -259,7 +259,7 @@ fn an_unreadable_corpus_is_reported_and_does_not_stop_the_server() {
     let tools = result(&replies[0]).get("tools").and_then(|t| t.as_arr());
     assert_eq!(
         tools.map(<[Json]>::len),
-        Some(6),
+        Some(8),
         "tools/list must still answer"
     );
 
@@ -571,7 +571,7 @@ fn every_tool_is_declared_read_only() {
         .get("tools")
         .and_then(|t| t.as_arr())
         .expect("tools");
-    assert_eq!(tools.len(), 6);
+    assert_eq!(tools.len(), 8);
     for t in tools {
         let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("");
         assert!(name.starts_with("aval_"), "{} needs the prefix", name);
@@ -613,6 +613,86 @@ fn the_descriptions_carry_the_contract() {
     assert!(resolve.contains("ADVISORY"), "suggestion guidance missing");
     assert!(by("aval_keys").contains("NOT AUTHORITY"));
     assert!(by("aval_history").contains("NOT AUTHORITY"));
+    // A rule is not advice: the description has to say whose authority it
+    // carries and where it sits against a decision, or a caller weighs it
+    // against remembered book advice and picks the book.
+    let rules = by("aval_rules");
+    assert!(rules.contains("ADOPTED BY"), "{}", rules);
+    assert!(rules.contains("PRECEDENCE"), "{}", rules);
+    assert!(rules.contains("does NOT"), "{}", rules);
+    assert!(by("aval_rule").contains("INACTIVE, not wrong"));
+}
+
+/// The two rule tools, against the corpus the CLI answers from — and byte-equal
+/// to what the CLI answers, because it is the same producer.
+#[test]
+fn the_rule_tools_answer_what_the_cli_answers() {
+    let r = corpus("rules");
+    write(
+        &r,
+        ".adr.yaml",
+        &format!("{}rules:\n  - docs/p/book.md\n", REGISTRY),
+    );
+    write(
+        &r,
+        "docs/p/book.md",
+        "---\nadopts: ADR-0001\n---\n\
+         ## names.reveal-intent [constraint]\n\nNames reveal intention.\n\n\
+         Because an abbreviation is a private vocabulary.\n\n\
+         ## functions.few-arguments [heuristic]\n\nFew arguments.\n",
+    );
+
+    let replies = exchange(
+        &r,
+        &[
+            &call("aval_rules", "{}"),
+            &call("aval_rules", r#"{"level":"heuristic"}"#),
+            &call("aval_rule", r#"{"id":"names.reveal-intent"}"#),
+            &call("aval_rule", r#"{"id":"names.reveal-intnet"}"#),
+            &call("aval_rules", r#"{"level":"advisory"}"#),
+            &call("aval_rules", r#"{"all":"yes"}"#),
+        ],
+    );
+
+    let (all, is_err) = tool_result(&replies[0]);
+    assert!(!is_err);
+    assert_eq!(
+        all.get("rules").and_then(|x| x.as_arr()).map(<[Json]>::len),
+        Some(2)
+    );
+    assert_eq!(
+        content(&replies[0], 0).trim(),
+        cli(&r, &["rules", "--json"]).trim()
+    );
+
+    let (one, _) = tool_result(&replies[1]);
+    assert_eq!(
+        one.get("rules").and_then(|x| x.as_arr()).map(<[Json]>::len),
+        Some(1)
+    );
+
+    let (rule, is_err) = tool_result(&replies[2]);
+    assert!(!is_err);
+    assert!(rule
+        .get("body")
+        .and_then(|b| b.as_str())
+        .unwrap_or("")
+        .contains("private vocabulary"));
+
+    // An id the corpus does not carry is a tool RESULT with a suggestion, and
+    // `isError` — nothing was answered — exactly as `aval_show` reports one.
+    let (miss, is_err) = tool_result(&replies[3]);
+    assert!(is_err, "{}", miss);
+    assert_eq!(miss.get("exit").and_then(|e| e.as_i64()), Some(7));
+    assert_eq!(
+        miss.get("suggestion").and_then(|s| s.as_str()),
+        Some("names.reveal-intent")
+    );
+
+    // A malformed ARGUMENT is a protocol error: no reading of a tool result
+    // would help a client fix it.
+    assert_eq!(err_code(&replies[4]), -32602);
+    assert_eq!(err_code(&replies[5]), -32602);
 }
 
 #[test]

@@ -231,6 +231,7 @@ fn every_corpus_heads_file_matches_the_projection() {
         "contradiction",
         "retire-scoped",
         "scoped-keys",
+        "rules-sample",
     ];
     for name in corpora {
         let l = loaded(name);

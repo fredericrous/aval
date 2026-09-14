@@ -12,6 +12,7 @@ query, and the expected result. The harness rules are in the file's own
 | `diamond` | two branches replacing one predecessor, then a reconciliation absorbing both |
 | `contradiction` | the same corpus without the reconciliation, so competing heads are observable |
 | `retire-scoped` | a scope opting out of an inherited default |
+| `rules-sample` | rules: two constraints and a heuristic under a live record, one under a draft, one under a replaced record — so every reason a rule can be inactive has an instance |
 
 `homelab-sample` is converted from `homelab/docs/adr`. The frontmatter is a
 faithful conversion of what each ADR decides; the bodies are stubs, because this

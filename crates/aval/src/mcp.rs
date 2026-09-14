@@ -322,9 +322,82 @@ fn tools() -> Vec<Json> {
                 vec![
                     ("key", prop("string", KEY_ARG)),
                     ("scope", prop("string", SCOPE_ARG)),
-                    repo,
+                    repo.clone(),
                 ],
                 vec!["key"],
+            ),
+        ),
+        tool(
+            "aval_rules",
+            "The rules this repository's decisions have ADOPTED, one line each.\n\n\
+             A rule is not advice: it is ADOPTED BY a decision record and carries \
+             that record's authority, and it stops being active when that record \
+             is superseded or retired.\n\n\
+             PRECEDENCE, highest first: (1) a decision at the scope asked — \
+             aval_resolve with `scope`; (2) the default-scope decision it \
+             inherits from; (3) these rules; (4) the book or spec a rule cites, \
+             as explanation only. Remembered advice from that source does NOT \
+             outrank a rule here, and invoking it against one is contradicting a \
+             decision.\n\n\
+             The session-start hook already printed every CONSTRAINT, so call \
+             this for the heuristics — followed unless you argue why not, in \
+             that place — or to filter by `adopted_by`. `all: true` adds the \
+             inactive ones with the reason. No bodies: aval_rule <id> is the \
+             explanation. In a workspace `repo` is required, as for aval_heads.",
+            schema(
+                vec![
+                    (
+                        "level",
+                        Json::obj()
+                            .set("type", "string")
+                            .set("enum", vec!["constraint", "heuristic"])
+                            .set(
+                                "description",
+                                "`constraint` — followed, a review blocks on it — or \
+                                 `heuristic`. Omit for both.",
+                            ),
+                    ),
+                    (
+                        "adopted_by",
+                        prop(
+                            "string",
+                            "Only the rules one record adopts, e.g. `ADR-0011`.",
+                        ),
+                    ),
+                    (
+                        "all",
+                        prop(
+                            "boolean",
+                            "Include rules whose adopting record no longer holds, \
+                             each with `inactive_reason`. Default false.",
+                        ),
+                    ),
+                    repo.clone(),
+                ],
+                vec![],
+            ),
+        ),
+        tool(
+            "aval_rule",
+            "One rule: its statement, the record that adopts it, and the body \
+             that explains and translates it.\n\n\
+             Call this before arguing with a rule, and before applying one whose \
+             wording is doing work you cannot see — the body is where the rule is \
+             narrowed to this codebase, and where the cases it deliberately does \
+             not cover are written down. `active: false` means the adopting \
+             record no longer holds: the rule is INACTIVE, not wrong.\n\n\
+             Exact id only; there is no matching by similarity. aval_rules lists \
+             them. Rule ids are local to a corpus, so in a workspace `repo` is \
+             required.",
+            schema(
+                vec![
+                    (
+                        "id",
+                        prop("string", "A rule id, e.g. `names.reveal-intent`."),
+                    ),
+                    repo,
+                ],
+                vec!["id"],
             ),
         ),
         tool(
@@ -555,6 +628,8 @@ enum Ask<'a> {
     Heads,
     Show(&'a str),
     History { key: &'a str, scope: &'a str },
+    Rules(render::Filter),
+    Rule(&'a str),
 }
 
 impl Ask<'_> {
@@ -565,6 +640,8 @@ impl Ask<'_> {
             Ask::Heads => render::heads_in(l),
             Ask::Show(id) => render::show_in(l, id),
             Ask::History { key, scope } => render::history_in(l, key, scope),
+            Ask::Rules(f) => render::rules_in(l, f),
+            Ask::Rule(id) => render::rule_in(l, id),
         }
     }
 }
@@ -652,6 +729,38 @@ fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
             Ok(r) => Ask::Show(r),
             Err(e) => return error(id, INVALID_PARAMS, &e),
         },
+        "aval_rules" => {
+            let level = match opt_str(args, "level") {
+                None => None,
+                Some(l) => match aval_core::model::Level::parse(l) {
+                    Some(x) => Some(x),
+                    None => {
+                        return error(
+                            id,
+                            INVALID_PARAMS,
+                            &format!("`level` must be `constraint` or `heuristic`, not `{}`", l),
+                        )
+                    }
+                },
+            };
+            // `all` is a flag, and a non-boolean is a malformed call rather
+            // than a false: `{"all": "yes"}` silently meaning "no" would hide
+            // every inactive rule from a caller that asked for them.
+            let all = match args.and_then(|a| a.get("all")) {
+                None => false,
+                Some(Json::Bool(b)) => *b,
+                Some(_) => return error(id, INVALID_PARAMS, "`all` must be a boolean"),
+            };
+            Ask::Rules(render::Filter {
+                level,
+                adopted_by: opt_str(args, "adopted_by").map(str::to_string),
+                all,
+            })
+        }
+        "aval_rule" => match req_str(args, "id") {
+            Ok(r) => Ask::Rule(r),
+            Err(e) => return error(id, INVALID_PARAMS, &e),
+        },
         "aval_history" => match req_str(args, "key") {
             Ok(key) => Ask::History {
                 key,
@@ -710,6 +819,11 @@ fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
                 Ask::Show(_) => Some("aval_show"),
                 Ask::Heads => Some("aval_heads"),
                 Ask::Keys(_) => Some("aval_keys"),
+                // A rule id is corpus-local like a record id, so `aval_rule`
+                // across a workspace is under-specified; `aval_rules` is the
+                // size argument, the same one heads and keys make.
+                Ask::Rule(_) => Some("aval_rule"),
+                Ask::Rules(_) => Some("aval_rules"),
                 Ask::Resolve { .. } | Ask::History { .. } => None,
             };
             if let Some(tool) = needs_one {

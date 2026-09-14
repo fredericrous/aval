@@ -389,7 +389,12 @@ pub fn check(l: &Loaded) -> Vec<Finding> {
     let roots = top_level(&l.root);
     let links = gitlinks(&l.root);
     let mut pending: Vec<(String, usize, String)> = Vec::new();
-    for (name, src) in &l.files {
+    // Rule files are documents of this repository too. A rule's body cites the
+    // code it is about — the module that does it right, the test that pins it —
+    // and a citation that rots there is exactly as misleading as one in a
+    // record. A vendored rule is not here, for §2.3's reason: its citations
+    // point into the repository that wrote it.
+    for (name, src) in l.files.iter().chain(l.rule_files.iter()) {
         // A draft PROPOSES. ADR-0016 writes "New patch file:
         // `infrastructure/homelab/patch/strix-machineconfig-patch.yaml`" about a
         // file the work would create, which is intent rather than evidence, and
@@ -590,6 +595,7 @@ mod base_tests {
             root: PathBuf::from(root),
             adr_dir: PathBuf::from(root).join("docs/adr"),
             files: Vec::new(),
+            rule_files: Vec::new(),
             packs: Vec::new(),
         }
     }

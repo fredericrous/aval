@@ -7,7 +7,7 @@ use crate::load::{self, Corpora, Loaded, Repo};
 use crate::provenance::{self, Provenance};
 use aval_core::graph::{DerivedStatus, Graph, Inconsistent, Unknown, Verdict};
 use aval_core::json::Json;
-use aval_core::model::{Adr, AdrId, Finding, Slot};
+use aval_core::model::{Adr, AdrId, Finding, Level, Rule, Slot};
 use aval_core::pack::Pack;
 use std::path::Path;
 
@@ -477,6 +477,140 @@ pub fn keys_text(g: &Graph, packs: &[Pack]) -> String {
     s
 }
 
+// ------------------------------------------------------------------ rules
+//
+// A rule is listed, or fetched by id. The two are deliberately different sizes:
+// the list is one line each and carries no body, because it is what a caller
+// reads to find out what there is; the single rule carries everything, because
+// it is what a caller reads to find out why.
+
+/// Which rules to list.
+#[derive(Debug, Clone, Default)]
+pub struct Filter {
+    pub level: Option<Level>,
+    /// Only rules adopted by this record.
+    pub adopted_by: Option<String>,
+    /// Inactive rules too, each with the reason it is inactive.
+    pub all: bool,
+}
+
+/// The rules a filter selects, in the order they are printed.
+///
+/// Constraints first and ids within, because that is the order of obligation: a
+/// constraint is followed and a heuristic is argued about, and a caller reading
+/// a long list top-down meets the binding ones first. The corpus's own rule
+/// order is by id already (`load`), so this is one stable sort on the level.
+fn selected<'a>(g: &'a Graph, f: &Filter) -> Vec<(&'a Rule, Option<String>)> {
+    let mut v: Vec<(&Rule, Option<String>)> = g
+        .corpus()
+        .rules
+        .iter()
+        .filter(|r| f.level.map_or(true, |l| l == r.level))
+        .filter(|r| {
+            f.adopted_by
+                .as_deref()
+                .map_or(true, |a| r.adopts.as_str() == a)
+        })
+        .map(|r| (r, g.rule_reason(r)))
+        .filter(|(_, reason)| f.all || reason.is_none())
+        .collect();
+    v.sort_by(|(x, _), (y, _)| x.level.cmp(&y.level).then(x.id.cmp(&y.id)));
+    v
+}
+
+fn rule_row_json(r: &Rule, reason: &Option<String>) -> Json {
+    Json::obj()
+        .set("id", r.id.as_str())
+        .set("level", r.level.as_str())
+        .set("adopts", r.adopts.as_str())
+        .set("statement", r.statement.as_str())
+        .set_opt("source", r.source.clone())
+        .set("file", r.file.as_str())
+        .set_opt("pack", r.pack.clone())
+        .set("active", reason.is_none())
+        .set_opt("inactive_reason", reason.clone())
+}
+
+pub fn rules_json(g: &Graph, f: &Filter) -> Json {
+    let rows: Vec<Json> = selected(g, f)
+        .iter()
+        .map(|(r, reason)| rule_row_json(r, reason))
+        .collect();
+    Json::obj().set("rules", rows)
+}
+
+pub fn rules_text(g: &Graph, f: &Filter) -> String {
+    let rows = selected(g, f);
+    // Padded to the longest id in what is actually printed, so the statements
+    // line up and a short list is not padded to a long id it does not contain.
+    let width = rows.iter().map(|(r, _)| r.id.len()).max().unwrap_or(0);
+    let mut s = String::new();
+    for (r, reason) in &rows {
+        s.push_str(&format!(
+            "{:<10} {:<width$}  {}",
+            r.level.as_str(),
+            r.id,
+            r.statement,
+            width = width
+        ));
+        match reason {
+            Some(why) => s.push_str(&format!("   (inactive: {})\n", why)),
+            None => s.push('\n'),
+        }
+    }
+    s
+}
+
+pub fn rule_json(g: &Graph, r: &Rule) -> Json {
+    let reason = g.rule_reason(r);
+    rule_row_json(r, &reason).set("body", r.body.as_str())
+}
+
+pub fn rule_text(g: &Graph, r: &Rule) -> String {
+    let mut s = format!("{}   {}\n", r.id, r.level);
+    let status = g
+        .corpus()
+        .adr(&r.adopts)
+        .map(|a| status_word(g.derived_status(a)))
+        .unwrap_or("unknown");
+    s.push_str(&format!("  adopts: {}   ({})\n", r.adopts, status));
+    if let Some(src) = &r.source {
+        s.push_str(&format!("  source: {}\n", src));
+    }
+    match &r.pack {
+        Some(p) => s.push_str(&format!(
+            "  file: {}   ·   vendored from the `{}` pack; change it there, not here\n",
+            r.file, p
+        )),
+        None => s.push_str(&format!("  file: {}\n", r.file)),
+    }
+    if let Some(why) = g.rule_reason(r) {
+        s.push_str(&format!("  inactive: {}\n", why));
+    }
+    s.push('\n');
+    s.push_str(&r.statement);
+    s.push('\n');
+    if !r.body.is_empty() {
+        s.push('\n');
+        s.push_str(&r.body);
+        s.push('\n');
+    }
+    s
+}
+
+/// The exit-7 object for a rule id the corpus does not declare.
+///
+/// The same shape as `show`'s, because it is the same question asked of a
+/// different namespace, and a caller that learned one should not have to learn
+/// a second.
+pub fn rule_unknown_json(id: &str, suggestion: Option<String>) -> Json {
+    Json::obj()
+        .set("state", "unknown")
+        .set("exit", 7)
+        .set("rule", id)
+        .set_opt("suggestion", suggestion)
+}
+
 /// The exit-7 object for an ADR id the corpus does not carry.
 ///
 /// Byte-for-byte what `cmd_show` built inline. It lives here so the MCP server
@@ -682,6 +816,51 @@ pub fn show_in(l: &Loaded, id: &str) -> Reply {
             }
             Reply {
                 json: show_unknown_json(id, sug),
+                text,
+                exit: 7,
+                is_error: true,
+            }
+        }
+    }
+}
+
+pub fn rules_in(l: &Loaded, f: &Filter) -> Reply {
+    Reply {
+        json: rules_json(&l.graph, f),
+        text: rules_text(&l.graph, f),
+        // An empty list is an answer: this corpus adopts no rule matching that
+        // filter. Nothing failed, so nothing is reported as having failed.
+        exit: 0,
+        is_error: false,
+    }
+}
+
+pub fn rule_in(l: &Loaded, id: &str) -> Reply {
+    match l.graph.corpus().rule(id) {
+        Some(r) => Reply {
+            json: rule_json(&l.graph, r),
+            text: rule_text(&l.graph, r),
+            exit: 0,
+            is_error: false,
+        },
+        None => {
+            let names: Vec<&str> = l
+                .graph
+                .corpus()
+                .rules
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect();
+            let sug = aval_core::model::suggest(id, names).map(str::to_string);
+            let mut text = format!("aval: no such rule `{}`\n", id);
+            if let Some(s) = &sug {
+                text.push_str(&format!(
+                    "  did you mean `{}`? A suggestion is advisory.\n",
+                    s
+                ));
+            }
+            Reply {
+                json: rule_unknown_json(id, sug),
                 text,
                 exit: 7,
                 is_error: true,

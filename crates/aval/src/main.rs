@@ -24,6 +24,10 @@ USAGE
     aval keys [--names]                    the vocabulary: every key, where it
                                            is answerable, where it is decided;
                                            --names omits where it is decided
+    aval rules [--level <level>]           the adopted rules, one line each;
+               [--adopted-by <record>]     --level constraint|heuristic, --all
+               [--all]                     adds the inactive ones with the reason
+    aval rule <id>                         one rule, with its translation and why
     aval check                             every invariant; the gate runs this
     aval heads [--write | --check]         the projection
     aval show <ADR-NNNN>                   derived status of one document
@@ -45,7 +49,10 @@ SOURCES
 
 OPTIONS
     --json        machine output on stdout, warnings suppressed
-    --all-repos   resolve, keys, heads, history: ask every corpus `aval repos`
+    --level       rules: constraint or heuristic
+    --adopted-by  rules: only those one record adopts
+    --all         rules: inactive rules too, each with the reason
+    --all-repos   resolve, keys, heads, history, rules: ask every corpus `aval repos`
                   lists, and report them keyed by name (exit 0 clean · 1 a
                   member contradicts or would not load · 3 none loaded)
     --as <name>   name one vendored pack (add only); it becomes the id prefix
@@ -55,6 +62,7 @@ OPTIONS
 
 EXIT
     resolve  0 active · 4 undecided · 5 contradiction · 6 retired · 7 unknown
+    rule     0 found · 7 unknown
     others   0 ok · 1 findings or stale
     always   1 tool failure · 2 usage · 3 unreadable or invalid corpus
     mcp      0 stdin closed · 1 transport failure · 2 usage. Never 3: a
@@ -72,8 +80,11 @@ struct Args {
     positional: Vec<String>,
     scope: Option<String>,
     as_name: Option<String>,
+    level: Option<String>,
+    adopted_by: Option<String>,
     json: bool,
     names: bool,
+    all: bool,
     all_repos: bool,
     write: bool,
     check: bool,
@@ -87,8 +98,11 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         positional: Vec::new(),
         scope: None,
         as_name: None,
+        level: None,
+        adopted_by: None,
         json: false,
         names: false,
+        all: false,
         all_repos: false,
         write: false,
         check: false,
@@ -101,6 +115,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         match arg {
             "--json" => a.json = true,
             "--names" => a.names = true,
+            // `--all` before `--all-repos` is only a reading order; the match
+            // is on the whole word, so neither prefixes the other.
+            "--all" => a.all = true,
             "--all-repos" => a.all_repos = true,
             "--write" => a.write = true,
             "--check" => a.check = true,
@@ -114,6 +131,16 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 a.as_name = Some(argv.get(i).ok_or("`--as` needs a name")?.clone());
             }
             s if s.starts_with("--as=") => a.as_name = Some(s[5..].to_string()),
+            "--level" => {
+                i += 1;
+                a.level = Some(argv.get(i).ok_or("`--level` needs a value")?.clone());
+            }
+            s if s.starts_with("--level=") => a.level = Some(s[8..].to_string()),
+            "--adopted-by" => {
+                i += 1;
+                a.adopted_by = Some(argv.get(i).ok_or("`--adopted-by` needs a record")?.clone());
+            }
+            s if s.starts_with("--adopted-by=") => a.adopted_by = Some(s[13..].to_string()),
             "-C" => {
                 i += 1;
                 a.dir = PathBuf::from(argv.get(i).ok_or("`-C` needs a directory")?);
@@ -174,6 +201,8 @@ fn run(args: &Args) -> i32 {
     match args.command.as_str() {
         "resolve" => cmd_resolve(args),
         "keys" => cmd_keys(args),
+        "rules" => cmd_rules(args),
+        "rule" => cmd_rule(args),
         "repos" => cmd_repos(args),
         "mcp" => cmd_mcp(args),
         "check" => cmd_check(args),
@@ -320,6 +349,81 @@ fn cmd_keys(args: &Args) -> i32 {
         let _ = std::io::stdout().flush();
     }
     0
+}
+
+/// The rules this corpus's records adopt.
+///
+/// One line each, and no bodies: this is the list a caller reads to find out
+/// what there is. `aval rule <id>` is where the explanation lives, and keeping
+/// them apart is what lets the session hook print every constraint without
+/// printing an essay per constraint.
+fn cmd_rules(args: &Args) -> i32 {
+    if !args.positional.is_empty() {
+        eprintln!("aval: `rules` takes no arguments; `aval rule <id>` shows one");
+        return E_USAGE;
+    }
+    let level = match args.level.as_deref() {
+        None => None,
+        Some(l) => match aval_core::model::Level::parse(l) {
+            Some(x) => Some(x),
+            None => {
+                eprintln!(
+                    "aval: `--level` is `constraint` or `heuristic`, not `{}`",
+                    l
+                );
+                return E_USAGE;
+            }
+        },
+    };
+    let filter = render::Filter {
+        level,
+        adopted_by: args.adopted_by.clone(),
+        all: args.all,
+    };
+    if args.all_repos {
+        return all_repos(args, |l, _| render::rules_in(l, &filter));
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    if args.json {
+        println!("{}", render::rules_json(&l.graph, &filter));
+    } else {
+        print!("{}", render::rules_text(&l.graph, &filter));
+        let _ = std::io::stdout().flush();
+    }
+    0
+}
+
+/// One rule, with its translation.
+///
+/// Exit 7 for an id the corpus does not declare, with the same advisory
+/// did-you-mean `show` gives: a rule id is exact, for §12.1's reason.
+fn cmd_rule(args: &Args) -> i32 {
+    let id = match one_positional(args, "a rule id") {
+        Ok(k) => k,
+        Err(c) => return c,
+    };
+    if args.all_repos {
+        // Rule ids are local to a corpus, exactly as record ids are (§3.8).
+        eprintln!("aval: `rule` names one rule in one corpus; use -C <repo>, not `--all-repos`");
+        return E_USAGE;
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    let r = render::rule_in(&l, &id);
+    if args.json {
+        println!("{}", r.json);
+    } else if r.exit == 0 {
+        print!("{}", r.text);
+        let _ = std::io::stdout().flush();
+    } else {
+        eprint!("{}", r.text);
+    }
+    r.exit
 }
 
 /// Serve the corpus as MCP tools on stdio.

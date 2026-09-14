@@ -1,0 +1,13 @@
+dir: docs/adr
+rules:
+  - docs/principles/naming.md
+  - docs/principles/proposed.md
+  - docs/principles/early.md
+scopes: []
+keys:
+  code.naming:
+    description: How identifiers are named
+  code.arguments:
+    description: How a function takes its inputs
+  storage.binding:
+    description: When a storage backend is chosen
