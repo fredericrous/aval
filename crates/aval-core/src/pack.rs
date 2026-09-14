@@ -102,6 +102,25 @@ fn out(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\\\""))
 }
 
+/// A block sequence, or `[]` when there is nothing to list.
+///
+/// A bare `scopes:` with no items reads back as an empty scalar, not as a
+/// list, and the consumer refuses the whole pack with `pack-parses`. That is
+/// the right refusal for a file it cannot read, and the wrong file to have
+/// written: a registry with `scopes: []`, and a key with `scopes: []` — which
+/// means "the default scope only" and is a declaration worth carrying — both
+/// produced a pack nobody could load.
+fn list(key: &str, items: &[&str], indent: &str) -> String {
+    if items.is_empty() {
+        return format!("{}: []\n", key);
+    }
+    let mut o = format!("{}:\n", key);
+    for s in items {
+        o.push_str(&format!("{}- {}\n", indent, out(s)));
+    }
+    o
+}
+
 /// The declarations of a corpus, as the text a consumer will vendor.
 ///
 /// Deterministic and sorted, for the same reason `project::render` is: the file
@@ -117,10 +136,7 @@ pub fn render(c: &Corpus) -> String {
 
     let mut scopes: Vec<&str> = c.registry.scopes.iter().map(String::as_str).collect();
     scopes.sort();
-    o.push_str("scopes:\n");
-    for s in &scopes {
-        o.push_str(&format!("  - {}\n", out(s)));
-    }
+    o.push_str(&list("scopes", &scopes, "  "));
 
     let mut keys: Vec<&KeyDef> = c.registry.keys.iter().collect();
     keys.sort_by(|x, y| x.name.cmp(&y.name));
@@ -130,13 +146,10 @@ pub fn render(c: &Corpus) -> String {
         if let Some(d) = &k.description {
             o.push_str(&format!("    description: {}\n", out(d)));
         }
-        if let Some(list) = &k.scopes {
-            o.push_str("    scopes:\n");
-            let mut v: Vec<&str> = list.iter().map(String::as_str).collect();
+        if let Some(items) = &k.scopes {
+            let mut v: Vec<&str> = items.iter().map(String::as_str).collect();
             v.sort();
-            for s in &v {
-                o.push_str(&format!("      - {}\n", out(s)));
-            }
+            o.push_str(&list("    scopes", &v, "      "));
         }
     }
 
@@ -713,6 +726,25 @@ mod tests {
         // The value carries ` # `, which an unquoted scalar would have lost to
         // the comment stripper. Quoting every value is what keeps it.
         assert_eq!(e.reason.as_deref(), Some("Kysely # was the alternative"));
+    }
+
+    #[test]
+    fn empty_scope_lists_survive_the_trip() {
+        // A registry with no scopes, and a key decided at the default scope
+        // only. Both are legal declarations; both used to render as a bare
+        // `scopes:` that read back as an empty scalar and refused the pack.
+        let mut c = corpus();
+        c.registry.scopes.clear();
+        c.registry.keys[0].scopes = Some(Vec::new());
+        c.adrs[0].decisions[0].scope = DEFAULT_SCOPE.into();
+        let text = render(&c);
+        assert!(text.contains("scopes: []\n"), "{}", text);
+        assert!(text.contains("    scopes: []\n"), "{}", text);
+        let p = parse(".adr/packs/fleet.yaml", "fleet", &text).expect("parses");
+        assert!(p.scopes.is_empty());
+        // `Some([])` and `None` are different declarations (SEMANTICS 2.1),
+        // and the trip must not collapse one into the other.
+        assert_eq!(p.keys[0].scopes.as_deref(), Some(&[][..]));
     }
 
     #[test]
