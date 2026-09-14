@@ -42,7 +42,8 @@
 //! here. Two repositories both numbering from one would otherwise collide, and
 //! the collision would look like `id-unique` firing on a corpus whose author
 //! wrote neither id. The qualification happens at load, not at vendor time, so
-//! the file on disk stays byte-identical to what the producer published.
+//! the file on disk stays what the producer published rather than something
+//! this tool rewrote on the way in.
 
 use crate::model::*;
 use crate::yaml::{self, Node};
@@ -100,13 +101,15 @@ pub fn bad_name(name: &str) -> Option<String> {
 /// whole class.
 ///
 /// Double quotes, unless the value holds more double quotes than single ones;
-/// then single quotes, with `'` doubled. That is the choice prettier makes
-/// for YAML, and it matters because a vendored pack lives in repositories
-/// whose pre-commit hook runs prettier over everything: the first pack that
-/// carried a rule statement with a quoted word inside it was rewritten by the
-/// formatter in three consumers in one afternoon, and a generated file that a
-/// formatter rewrites is a file that gets hand-edited. Emitting the quoting
-/// the formatter would choose makes it a no-op instead.
+/// then single quotes, with `'` doubled. That is the choice prettier makes for
+/// YAML, and it is now a **courtesy rather than a defence**. It was load-bearing
+/// in 1.2.1, when the vendored copy was a `.yaml` a formatter would rewrite and
+/// byte-equality was what said the file was still the published one. Neither
+/// holds: a vendored pack is a `.pack`, which no formatter claims, and equality
+/// is declarational (§2.3), so a requoted file has changed nothing anyone reads.
+/// The quoting stays because it costs nothing and keeps a formatter quiet over
+/// the producer's own `aval.pack` if a repository ever configures one to claim
+/// that extension too.
 fn out(s: &str) -> String {
     let doubles = s.matches('"').count();
     let singles = s.matches('\'').count();
@@ -816,10 +819,10 @@ mod tests {
 
     #[test]
     fn quoting_is_the_style_prettier_would_choose() {
-        // A formatter that rewrites a generated file turns it into a file
-        // that gets hand-edited; emitting prettier's own choice makes the
-        // formatter a no-op. More double quotes than single: single-quoted,
-        // with the single quote doubled. Otherwise double-quoted.
+        // A courtesy to formatters since 1.3, not a defence: the vendored file
+        // is a `.pack` and equality is declarational. More double quotes than
+        // single: single-quoted, with the single quote doubled. Otherwise
+        // double-quoted.
         assert_eq!(out("plain"), "\"plain\"");
         assert_eq!(out("say \"hi\""), "'say \"hi\"'");
         assert_eq!(out("it's"), "\"it's\"");

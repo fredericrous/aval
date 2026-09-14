@@ -215,6 +215,14 @@ is enough. Transport is git and only git, so a private repository and a forge
 behind a client certificate both work with your own credentials and no token
 issued to this tool.
 
+The vendored file is `.adr/packs/<name>.pack`, with the extension the producer's
+own published file carries and no formatter claims. A `.adr/packs/<name>.yaml`
+written before 1.3 still loads, and the next `aval add` moves it and rewrites
+its registry line. What makes it still the published pack is what it
+*declares*, not its bytes — so a formatter that reformatted it has changed
+nothing, while a hand-edited decision is reported by `aval add --check` as
+`edited`.
+
 What a consumer cannot do is quietly disagree. A local record deciding a slot a
 pack already decides is two heads for one slot, which is exit 5 — the invariant
 the model already had, and the reason vendoring is worth anything. What it
