@@ -6,7 +6,7 @@ members = ["crates/aval-core", "crates/aval"]
 # honest; a `rust-version` nobody compiles against is a comment with syntax.
 [workspace.package]
 rust-version = "1.74"
-version = "1.2.0"
+version = "1.2.1"
 license = "MIT"
 repository = "https://github.com/fredericrous/aval"
 authors = ["Frederic Rousseau"]
@@ -38,7 +38,7 @@ needless_pass_by_value = "warn"
 redundant_clone = "warn"
 
 [workspace.dependencies]
-aval-core = { path = "crates/aval-core", version = "1.2.0" }
+aval-core = { path = "crates/aval-core", version = "1.2.1" }
 
 [profile.release]
 strip = true

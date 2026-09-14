@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## v1.2.1
+
+A pack's quoting is now the style prettier would choose: double quotes,
+unless a value holds more double quotes than single ones, in which case
+single quotes with `'` doubled. The first pack that carried a rule statement
+with a quoted word inside it was rewritten by the formatter in three
+consumer repositories in one afternoon — every one of them runs prettier at
+pre-commit — and a generated file that a formatter rewrites is a file that
+gets hand-edited. Emitting the formatter's own choice makes it a no-op.
+
+Content is unchanged: every value reads back byte-for-byte, and a consumer on
+1.2.0 reads the new pack as before. A producer re-runs `aval pack --write`
+(the version stamp moves anyway) and consumers re-run `aval add`, after which
+prettier has nothing to say about `.adr/packs/`.
+
+### Fixed
+
+- `aval pack --write` chooses single quotes for a value holding more double
+  quotes than single ones. The four statements in the fleet corpus that were
+  being reformatted are the case in point.
+
 ## v1.2.0
 
 Rules. A decision settles *what* is used; it never settled how the code that
