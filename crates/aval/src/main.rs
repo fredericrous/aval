@@ -778,6 +778,7 @@ fn cmd_add_check(args: &Args) -> i32 {
     }
 
     let mut behind = 0;
+    let mut edited = 0;
     let mut unknown = 0;
     for o in add::origins(&l.root, packs) {
         let o = match o {
@@ -788,7 +789,7 @@ fn cmd_add_check(args: &Args) -> i32 {
                 continue;
             }
         };
-        match add::standing(&o) {
+        match add::standing(&l.root, &o) {
             add::Standing::Current => println!(
                 "  {:<9} {} @ {}  ({})",
                 "current",
@@ -796,6 +797,16 @@ fn cmd_add_check(args: &Args) -> i32 {
                 aval::fetch::short(&o.commit),
                 o.source
             ),
+            add::Standing::Edited => {
+                edited += 1;
+                println!(
+                    "  {:<9} {}: the vendored declarations are not what {}@{} published",
+                    "edited",
+                    o.name,
+                    o.source,
+                    aval::fetch::short(&o.commit)
+                );
+            }
             add::Standing::Behind(now) => {
                 behind += 1;
                 println!(
@@ -821,7 +832,7 @@ fn cmd_add_check(args: &Args) -> i32 {
         }
     }
 
-    if behind == 0 {
+    if behind + edited == 0 {
         if unknown > 0 {
             println!(
                 "\n{} pack(s) could not be checked. Being unable to ask is not an answer.",
@@ -830,10 +841,18 @@ fn cmd_add_check(args: &Args) -> i32 {
         }
         return 0;
     }
+    // One sentence for both, because one command fixes both: `aval add` writes
+    // what the source published, which is what a behind pack lacks and what an
+    // edited one lost.
     println!(
-        "\n{} pack(s) behind. Run `aval add <source>` for each, read the diff, \
+        "\n{} pack(s) {}. Run `aval add <source>` for each, read the diff, \
          then `aval heads --write`.",
-        behind
+        behind + edited,
+        match (behind, edited) {
+            (0, _) => "edited",
+            (_, 0) => "behind",
+            _ => "behind or edited",
+        }
     );
     E_FAIL
 }
@@ -891,11 +910,11 @@ fn cmd_add(args: &Args) -> i32 {
     let mut plans = Vec::new();
     for v in &vendored {
         match add::plan(&root, v) {
-            Ok(add::Plan::Collision(other)) => {
+            Ok(add::Plan::Collision { rel, other }) => {
                 eprintln!(
                     "aval: {} already holds {}, which came from {} — name this \
                      one with `--as <name>`",
-                    v.rel, v.name, other
+                    rel, v.name, other
                 );
                 return E_FAIL;
             }
@@ -914,8 +933,16 @@ fn cmd_add(args: &Args) -> i32 {
         let state: String = match p {
             add::Plan::New => "new".into(),
             add::Plan::Unchanged => "unchanged".into(),
+            // The same commit, declaring something else: the file in this
+            // repository was changed, and this run puts back what the source
+            // published. That is the `edited` standing `--check` reports.
+            add::Plan::Update(old) if old == &v.id => "edited here".into(),
             add::Plan::Update(old) => format!("was {}", aval::fetch::short(old)),
-            add::Plan::Collision(_) => unreachable!("returned above"),
+            add::Plan::Migrate { had, .. } if had == &v.id => "migrated".into(),
+            add::Plan::Migrate { had, .. } => {
+                format!("migrated, was {}", aval::fetch::short(had))
+            }
+            add::Plan::Collision { .. } => unreachable!("returned above"),
         };
         println!(
             "{} @ {} ({}) declares {} record(s), {} key(s):",
@@ -925,6 +952,11 @@ fn cmd_add(args: &Args) -> i32 {
             v.records,
             v.keys.len()
         );
+        // Printed with the plan rather than with the writing, so `--dry-run`
+        // says that the file is about to move.
+        if let add::Plan::Migrate { from, .. } = p {
+            println!("  {:<9} {}  {} → {}", "migrated", v.name, from, v.rel);
+        }
         for k in &v.keys {
             println!("    {}", k);
         }
@@ -936,13 +968,12 @@ fn cmd_add(args: &Args) -> i32 {
     }
 
     let mut registered = Vec::new();
-    for v in &vendored {
-        match add::write(&root, v) {
-            Ok(newly) => {
-                if newly {
-                    registered.push(v.rel.clone());
-                }
-            }
+    let mut relisted = Vec::new();
+    for (v, p) in vendored.iter().zip(&plans) {
+        match add::write(&root, v, p) {
+            Ok(add::Listed::Added) => registered.push(v.rel.clone()),
+            Ok(add::Listed::Relisted) => relisted.push(v.rel.clone()),
+            Ok(add::Listed::Already) => {}
             Err(e) => {
                 eprintln!("aval: {}", e);
                 return E_FAIL;
@@ -951,11 +982,20 @@ fn cmd_add(args: &Args) -> i32 {
     }
 
     println!();
-    for v in &vendored {
-        println!("  wrote {}", v.rel);
+    for (v, p) in vendored.iter().zip(&plans) {
+        // A pack that already declares what the producer published is not
+        // rewritten, so saying "wrote" would be a claim about the disk that is
+        // not true — and the file's formatting, deliberately, is not ours.
+        match p {
+            add::Plan::Unchanged => println!("  unchanged {}", v.rel),
+            _ => println!("  wrote {}", v.rel),
+        }
     }
     for r in &registered {
         println!("  listed {} in {}", r, load::REGISTRY);
+    }
+    for r in &relisted {
+        println!("  relisted {} in {}", r, load::REGISTRY);
     }
 
     // A vendored decision is decided here, so it belongs in the projection —

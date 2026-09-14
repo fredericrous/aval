@@ -236,7 +236,7 @@ fn a_pack_lands_with_its_commit_id_and_is_registered() {
     let got = run(&c, &["add", &src(&fleet)]);
     assert_eq!(got.code, 0, "{}", got.all());
 
-    let vendored = fs::read_to_string(c.join(".adr/packs/land-fleet.yaml")).expect("written");
+    let vendored = fs::read_to_string(c.join(".adr/packs/land-fleet.pack")).expect("written");
     let head = String::from_utf8_lossy(
         &Command::new("git")
             .args(["rev-parse", "HEAD"])
@@ -254,7 +254,7 @@ fn a_pack_lands_with_its_commit_id_and_is_registered() {
     );
     assert!(fs::read_to_string(c.join(".adr.yaml"))
         .unwrap()
-        .contains("- .adr/packs/land-fleet.yaml"));
+        .contains("- .adr/packs/land-fleet.pack"));
 }
 
 /// The point of the whole exercise: a repository with no corpus of its own
@@ -367,7 +367,7 @@ fn a_consumer_widens_a_vendored_key_and_the_fleet_head_does_not_move() {
     write(
         &c,
         ".adr.yaml",
-        "dir: docs/adr\npacks:\n  - .adr/packs/fleet.yaml\nscopes: [browser]\nkeys:\n  \
+        "dir: docs/adr\npacks:\n  - .adr/packs/fleet.pack\nscopes: [browser]\nkeys:\n  \
          app.router:\n  stack.sql-layer:\n    scopes: [browser]\n",
     );
     write(
@@ -411,7 +411,7 @@ fn a_local_description_for_a_vendored_key_is_refused() {
     write(
         &c,
         ".adr.yaml",
-        "dir: docs/adr\npacks:\n  - .adr/packs/fleet.yaml\nscopes: []\nkeys:\n  \
+        "dir: docs/adr\npacks:\n  - .adr/packs/fleet.pack\nscopes: []\nkeys:\n  \
          app.router:\n  stack.sql-layer:\n    description: my own words\n",
     );
     let got = run(&c, &["check"]);
@@ -526,6 +526,129 @@ fn add_check_is_quiet_where_nothing_is_vendored() {
     assert!(got.out.contains("vendors no packs"), "{}", got.out);
 }
 
+/// What every consumer of 1.2 has on disk: the pack as `<name>.yaml`, listed
+/// under that path. `add` moves both, and nothing else in the registry moves.
+#[test]
+fn a_pack_vendored_before_1_3_is_migrated_with_its_registry_line() {
+    let fleet = producer("migrate-fleet");
+    let c = consumer_pack_only("migrate-consumer");
+    assert_eq!(run(&c, &["add", "--as", "fleet", &src(&fleet)]).code, 0);
+
+    // Wind the clock back to what the previous version wrote.
+    fs::rename(
+        c.join(".adr/packs/fleet.pack"),
+        c.join(".adr/packs/fleet.yaml"),
+    )
+    .unwrap();
+    let old_reg = fs::read_to_string(c.join(".adr.yaml"))
+        .unwrap()
+        .replace("fleet.pack", "fleet.yaml")
+        + "# a comment of my own\n";
+    fs::write(c.join(".adr.yaml"), &old_reg).unwrap();
+    // It still loads, because a `packs:` entry is a literal path and no check
+    // reads the extension.
+    assert_eq!(run(&c, &["check"]).code, 0);
+
+    let dry = run(&c, &["add", "--dry-run", "--as", "fleet", &src(&fleet)]);
+    assert_eq!(dry.code, 0, "{}", dry.all());
+    assert!(dry.out.contains("migrated"), "{}", dry.out);
+    assert!(
+        c.join(".adr/packs/fleet.yaml").exists() && !c.join(".adr/packs/fleet.pack").exists(),
+        "--dry-run reports the move without making it"
+    );
+    assert_eq!(fs::read_to_string(c.join(".adr.yaml")).unwrap(), old_reg);
+
+    let got = run(&c, &["add", "--as", "fleet", &src(&fleet)]);
+    assert_eq!(got.code, 0, "{}", got.all());
+    assert!(
+        got.out
+            .contains("migrated  fleet  .adr/packs/fleet.yaml → .adr/packs/fleet.pack"),
+        "{}",
+        got.out
+    );
+    assert!(c.join(".adr/packs/fleet.pack").is_file());
+    assert!(
+        !c.join(".adr/packs/fleet.yaml").exists(),
+        "leaving it would vendor the same decisions twice, under two names"
+    );
+    assert_eq!(
+        fs::read_to_string(c.join(".adr.yaml")).unwrap(),
+        old_reg.replace("fleet.yaml", "fleet.pack"),
+        "one line moves; every other byte is the one the person wrote"
+    );
+    assert_eq!(run(&c, &["check"]).code, 0);
+
+    // And the second run has nothing left to do.
+    let again = run(&c, &["add", "--as", "fleet", &src(&fleet)]);
+    assert!(again.out.contains("unchanged"), "{}", again.out);
+}
+
+/// The reason for the extension, and for comparing declarations: a formatter
+/// went over the vendored file. It declares the same decisions, so it is
+/// current, and `add` does not fight it by rewriting it.
+#[test]
+fn a_formatted_pack_is_unchanged_and_is_left_exactly_as_it_is() {
+    let fleet = producer("format-fleet");
+    let c = consumer_pack_only("format-consumer");
+    assert_eq!(run(&c, &["add", "--as", "fleet", &src(&fleet)]).code, 0);
+
+    let path = c.join(".adr/packs/fleet.pack");
+    let formatted = fs::read_to_string(&path)
+        .unwrap()
+        .replace(
+            "\nrecords:",
+            "\n\n# tidied by somebody's pre-commit hook\nrecords:",
+        )
+        .replace("status: \"accepted\"", "status: 'accepted'");
+    fs::write(&path, &formatted).unwrap();
+
+    let got = run(&c, &["add", "--as", "fleet", &src(&fleet)]);
+    assert_eq!(got.code, 0, "{}", got.all());
+    assert!(got.out.contains("unchanged"), "{}", got.out);
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        formatted,
+        "a file that declares the same thing is not rewritten"
+    );
+    // And nobody edited anything, so nothing is reported as edited.
+    let check = run(&c, &["add", "--check"]);
+    assert_eq!(check.code, 0, "{}", check.all());
+    assert!(check.out.contains("current"), "{}", check.out);
+}
+
+/// The other half: the declarations themselves were changed here. The revision
+/// still names the recorded commit, so re-resolving alone would call it
+/// current — which is how a decision nobody made survives in a consumer.
+#[test]
+fn add_check_reports_a_pack_whose_declarations_were_changed_here() {
+    let fleet = producer("edit-fleet");
+    let c = consumer_pack_only("edit-consumer");
+    assert_eq!(run(&c, &["add", "--as", "fleet", &src(&fleet)]).code, 0);
+
+    let path = c.join(".adr/packs/fleet.pack");
+    let edited = fs::read_to_string(&path)
+        .unwrap()
+        .replace("\"@effect/sql\"", "\"Kysely\"");
+    fs::write(&path, edited).unwrap();
+
+    let got = run(&c, &["add", "--check"]);
+    assert_eq!(got.code, 1, "{}", got.all());
+    assert!(got.out.contains("edited"), "{}", got.out);
+    assert!(
+        got.out.contains("are not what"),
+        "it has to say what is wrong with it: {}",
+        got.out
+    );
+    assert!(got.out.contains("aval add"), "{}", got.out);
+
+    // Re-running `add` restores what the source published, and says so.
+    let fixed = run(&c, &["add", "--as", "fleet", &src(&fleet)]);
+    assert_eq!(fixed.code, 0, "{}", fixed.all());
+    assert!(fixed.out.contains("edited here"), "{}", fixed.out);
+    assert!(fs::read_to_string(&path).unwrap().contains("@effect/sql"));
+    assert_eq!(run(&c, &["add", "--check"]).code, 0);
+}
+
 #[test]
 fn re_adding_replaces_rather_than_appending() {
     let fleet = producer("again-fleet");
@@ -550,12 +673,12 @@ fn re_adding_replaces_rather_than_appending() {
     assert_eq!(run(&c, &["add", "--as", "fleet", &src(&fleet)]).code, 0);
     let reg = fs::read_to_string(c.join(".adr.yaml")).unwrap();
     assert_eq!(
-        reg.matches(".adr/packs/fleet.yaml").count(),
+        reg.matches(".adr/packs/fleet.pack").count(),
         1,
         "one entry, not two: {}",
         reg
     );
-    let vendored = fs::read_to_string(c.join(".adr/packs/fleet.yaml")).unwrap();
+    let vendored = fs::read_to_string(c.join(".adr/packs/fleet.pack")).unwrap();
     assert_eq!(vendored.matches("# commit:").count(), 1, "{}", vendored);
     assert!(vendored.contains("ADR-0009"), "{}", vendored);
     assert_eq!(
@@ -570,13 +693,13 @@ fn a_second_source_may_not_quietly_take_an_occupied_name() {
     let b = producer("collide-b");
     let c = consumer_pack_only("collide-consumer");
     assert_eq!(run(&c, &["add", "--as", "fleet", &src(&a)]).code, 0);
-    let vendored = fs::read_to_string(c.join(".adr/packs/fleet.yaml")).unwrap();
+    let vendored = fs::read_to_string(c.join(".adr/packs/fleet.pack")).unwrap();
 
     let got = run(&c, &["add", "--as", "fleet", &src(&b)]);
     assert_eq!(got.code, 1, "{}", got.all());
     assert!(got.err.contains("--as"), "{}", got.err);
     assert_eq!(
-        fs::read_to_string(c.join(".adr/packs/fleet.yaml")).unwrap(),
+        fs::read_to_string(c.join(".adr/packs/fleet.pack")).unwrap(),
         vendored,
         "the occupant must be untouched"
     );
@@ -591,7 +714,7 @@ fn an_annotated_tag_pins_end_to_end() {
     let c = consumer_pack_only("tag-consumer");
     let got = run(&c, &["add", &format!("{}@v1", src(&fleet))]);
     assert_eq!(got.code, 0, "{}", got.all());
-    assert!(fs::read_to_string(c.join(".adr/packs/tag-fleet.yaml"))
+    assert!(fs::read_to_string(c.join(".adr/packs/tag-fleet.pack"))
         .unwrap()
         .contains("# rev:    v1"));
 }

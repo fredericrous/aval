@@ -26,12 +26,26 @@
 
 use crate::fetch::{self, Scratch, Source};
 use crate::load::{self, pack_name};
-use aval_core::pack;
+use aval_core::{pack, yaml};
 use std::path::{Path, PathBuf};
 
 /// Where vendored packs live. One directory, so a reader can see every
 /// borrowed decision at once.
 pub const DIR: &str = ".adr/packs";
+
+/// The extension a vendored pack is written with, matching the `aval.pack` the
+/// producer publishes.
+///
+/// Not `.yaml`, and the reason is not taste. A consumer's pre-commit hook runs
+/// a formatter over every YAML file it can name, and one that requoted a
+/// vendored pack turned a generated file into a hand-edited one in three
+/// repositories in an afternoon. 1.2.1 answered by emitting the quoting
+/// prettier would choose, which is the wrong layer: a second formatter would
+/// disagree. An extension no formatter claims settles it for all of them.
+///
+/// A `.yaml` written before 1.3 still loads — a `packs:` entry is a literal
+/// path and no check reads the extension — and `aval add` migrates it.
+pub const EXT: &str = "pack";
 
 #[derive(Debug)]
 pub struct Vendored {
@@ -97,7 +111,7 @@ pub fn resolve_one(spec: &str, as_name: Option<&str>) -> Result<Vendored, String
     let scratch = Scratch::new(&name);
     let body = fetch::fetch(&source, &id, &scratch.0, pack::FILE)?;
 
-    let rel = format!("{}/{}.yaml", DIR, name);
+    let rel = format!("{}/{}.{}", DIR, name, EXT);
     // Parse before writing, with the parser the loader itself uses. A pack
     // that read here and not there would be a corpus nobody intended.
     let parsed = pack::parse(&rel, &name, &body).map_err(|f| {
@@ -127,42 +141,160 @@ pub fn resolve_one(spec: &str, as_name: Option<&str>) -> Result<Vendored, String
 #[derive(Debug)]
 pub enum Plan {
     New,
-    /// Same source, same bytes.
+    /// Same source, and the file already declares what the producer published.
     Unchanged,
-    /// Same source, different bytes.
+    /// Same source, different declarations. Carries the commit that was there.
     Update(String),
-    /// A different source already holds this name.
-    Collision(String),
+    /// A pack vendored by an earlier version, as `<name>.yaml`, from this same
+    /// source. The file moves to `<name>.pack` and its registry line with it.
+    Migrate {
+        /// The `.yaml` path, which is deleted and unlisted.
+        from: String,
+        /// The commit that file records, which the move does not change.
+        had: String,
+    },
+    /// Something else already holds this name.
+    Collision {
+        /// The file that holds it, which may be the `.yaml` of an earlier
+        /// version — naming the `.pack` we were about to write would send the
+        /// reader to open a file that is not there.
+        rel: String,
+        /// Where it came from, or that nothing says.
+        other: String,
+    },
+}
+
+/// Whether two pack texts **declare** the same thing.
+///
+/// Not a byte comparison, and that is the whole of §2.3's revision: a vendored
+/// pack sits in repositories that run a formatter at pre-commit, and a file
+/// requoted by one still says exactly what the producer published. Comparing
+/// bytes made such a file "changed", so `add` rewrote it on every run and
+/// `--check` would have called it edited by nobody.
+///
+/// A text that will not parse is not equal to anything. `resolve_one` has
+/// already parsed the fetched side, so this only ever fails on the vendored
+/// one — a file somebody broke by hand, which is exactly the file that should
+/// be rewritten rather than left alone.
+fn declares_the_same(a: &str, b: &str) -> bool {
+    match (yaml::parse(a), yaml::parse(b)) {
+        (Ok(x), Ok(y)) => yaml::same_values(&x, &y),
+        _ => false,
+    }
 }
 
 pub fn plan(root: &Path, v: &Vendored) -> std::io::Result<Plan> {
-    let path = root.join(&v.rel);
-    let Ok(have) = std::fs::read_to_string(&path) else {
+    if let Ok(have) = std::fs::read_to_string(root.join(&v.rel)) {
+        return Ok(match provenance(&have) {
+            Some((src, _, _)) if src != v.source.label => Plan::Collision {
+                rel: v.rel.clone(),
+                other: src,
+            },
+            Some((_, _, id)) if id == v.id && declares_the_same(&have, &v.body) => Plan::Unchanged,
+            Some((_, _, id)) => Plan::Update(id),
+            // No banner: somebody's own file, or one written by hand. Treat it
+            // as a collision rather than replacing it, for the same reason an
+            // unreadable settings file stops `hook install`.
+            None => Plan::Collision {
+                rel: v.rel.clone(),
+                other: "an unmarked file".into(),
+            },
+        });
+    }
+
+    // No `.pack`. A `.yaml` under the same name is what every consumer of 1.2
+    // and earlier has, and it is this pack rather than a second one — so it is
+    // moved, not duplicated. Leaving it would vendor the same decisions twice
+    // under two names, which is two heads for one slot.
+    let from = format!("{}/{}.yaml", DIR, v.name);
+    let Ok(old) = std::fs::read_to_string(root.join(&from)) else {
         return Ok(Plan::New);
     };
-    match provenance(&have) {
-        Some((src, _, _)) if src != v.source.label => Ok(Plan::Collision(src)),
-        Some((_, _, id)) if id == v.id && have == body_with_banner(v) => Ok(Plan::Unchanged),
-        Some((_, _, id)) => Ok(Plan::Update(id)),
-        // No banner: somebody's own file, or one written by hand. Treat it as a
-        // collision rather than replacing it, for the same reason an unreadable
-        // settings file stops `hook install`.
-        None => Ok(Plan::Collision("an unmarked file".into())),
-    }
+    Ok(match provenance(&old) {
+        Some((src, _, _)) if src != v.source.label => Plan::Collision {
+            rel: from,
+            other: src,
+        },
+        Some((_, _, id)) => Plan::Migrate { from, had: id },
+        None => Plan::Collision {
+            rel: from,
+            other: "an unmarked file".into(),
+        },
+    })
 }
 
 pub fn body_with_banner(v: &Vendored) -> String {
     format!("{}{}", banner(&v.source, &v.id), v.body)
 }
 
+/// What writing one pack did to the registry.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Listed {
+    /// The path was already listed.
+    Already,
+    /// A line was added to `packs:`.
+    Added,
+    /// The line naming the old path now names the new one.
+    Relisted,
+}
+
 /// Write the pack and register it. Callers have already planned every source.
-pub fn write(root: &Path, v: &Vendored) -> Result<bool, String> {
+///
+/// The plan is passed in rather than recomputed: a migration deletes a file and
+/// rewrites a registry line, and a second look at the disk between planning and
+/// writing is a second answer this command could get.
+pub fn write(root: &Path, v: &Vendored, p: &Plan) -> Result<Listed, String> {
     let path: PathBuf = root.join(&v.rel);
-    if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d).map_err(|e| format!("{}: {}", d.display(), e))?;
+    // An unchanged pack is left exactly as it is. It already declares what the
+    // producer published, and rewriting it would undo the formatter that ran
+    // over it — every run, forever, which is the loop this release ends.
+    if !matches!(p, Plan::Unchanged) {
+        if let Some(d) = path.parent() {
+            std::fs::create_dir_all(d).map_err(|e| format!("{}: {}", d.display(), e))?;
+        }
+        std::fs::write(&path, body_with_banner(v))
+            .map_err(|e| format!("{}: {}", path.display(), e))?;
     }
-    std::fs::write(&path, body_with_banner(v)).map_err(|e| format!("{}: {}", path.display(), e))?;
-    register(root, &v.rel)
+    let Plan::Migrate { from, .. } = p else {
+        return register(root, &v.rel);
+    };
+    // The new file first, the old one only once it is safely there: the failure
+    // to avoid is a registry naming a pack that no longer exists.
+    let old = root.join(from);
+    std::fs::remove_file(&old).map_err(|e| format!("{}: {}", old.display(), e))?;
+    relist(root, from, &v.rel)
+}
+
+/// Point the registry's `packs:` line at the migrated path.
+///
+/// Textual, like `register`, and for the same reason. Only the one line moves;
+/// every other byte of the file a person wrote is left as they wrote it.
+fn relist(root: &Path, from: &str, to: &str) -> Result<Listed, String> {
+    let path = root.join(load::REGISTRY);
+    let src = std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", load::REGISTRY, e))?;
+    let item = |l: &str, rel: &str| l.trim_start().starts_with('-') && l.contains(rel);
+    if !src.lines().any(|l| item(l, from)) {
+        // Nothing named the old path — a registry somebody edited by hand.
+        // Registering the new one is still the right end state.
+        return register(root, to);
+    }
+    // A registry that already names the destination would otherwise end up
+    // naming it twice, and a pack listed twice is a name collision at load.
+    let already = src.lines().any(|l| item(l, to));
+    let mut out = String::new();
+    for line in src.lines() {
+        if item(line, from) {
+            if already {
+                continue;
+            }
+            out.push_str(&line.replace(from, to));
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    std::fs::write(&path, out).map_err(|e| format!("{}: {}", load::REGISTRY, e))?;
+    Ok(Listed::Relisted)
 }
 
 /// Add the pack to the registry's `packs:` list, if it is not already there.
@@ -170,14 +302,14 @@ pub fn write(root: &Path, v: &Vendored) -> Result<bool, String> {
 /// A textual edit rather than a re-serialisation, because `.adr.yaml` is a file
 /// a person wrote and rewriting it would lose their comments and their
 /// ordering to make room for one line.
-fn register(root: &Path, rel: &str) -> Result<bool, String> {
+fn register(root: &Path, rel: &str) -> Result<Listed, String> {
     let path = root.join(load::REGISTRY);
     let src = std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", load::REGISTRY, e))?;
     if src
         .lines()
         .any(|l| l.trim_start().starts_with('-') && l.contains(rel))
     {
-        return Ok(false);
+        return Ok(Listed::Already);
     }
 
     let mut out = String::new();
@@ -208,7 +340,7 @@ fn register(root: &Path, rel: &str) -> Result<bool, String> {
         out.push_str(&format!("packs:\n  - {}\n", rel));
     }
     std::fs::write(&path, out).map_err(|e| format!("{}: {}", load::REGISTRY, e))?;
-    Ok(true)
+    Ok(Listed::Added)
 }
 
 /// What a vendored pack's banner says about where it came from.
@@ -227,6 +359,9 @@ pub enum Standing {
     Current,
     /// The revision now names a different commit.
     Behind(String),
+    /// The revision still names the recorded commit, but the file no longer
+    /// declares what that commit published.
+    Edited,
     /// The revision could not be resolved: offline, moved, or access lost.
     Unknown(String),
     /// No banner, so nothing says where it came from.
@@ -262,15 +397,41 @@ pub fn origins(root: &Path, rels: &[String]) -> Vec<Result<Origin, String>> {
 /// a check that needed the network would fail on a plane, in a CI job with no
 /// credential for the source, and in every repository whose forge cannot see
 /// the other one — which is the situation this whole mechanism exists for.
-pub fn standing(o: &Origin) -> Standing {
+pub fn standing(root: &Path, o: &Origin) -> Standing {
     let spec = format!("{}@{}", o.source, o.rev);
     let Ok(source) = fetch::parse_source(&spec) else {
         return Standing::Unmarked;
     };
     match fetch::resolve(&source) {
-        Ok(id) if id == o.commit => Standing::Current,
+        Ok(id) if id == o.commit => unedited(root, o, &source),
         Ok(id) => Standing::Behind(id),
         Err(e) => Standing::Unknown(e),
+    }
+}
+
+/// The revision still names the commit that was vendored. Whether the file
+/// still says what that commit said is the second question, and the one a
+/// re-resolution alone never asked.
+///
+/// Only asked of a `Current` pack, on purpose. A `Behind` one is being replaced
+/// whatever its content says, and an `Unknown` one cannot be fetched to compare
+/// against — reporting both would be two lines about one re-vendoring.
+///
+/// Declarations, never bytes: the vendored file lives where formatters run, and
+/// one that reindented it has edited nothing. What `edited` means is that
+/// somebody changed what this repository believes another repository decided.
+fn unedited(root: &Path, o: &Origin, source: &Source) -> Standing {
+    let scratch = Scratch::new(&o.name);
+    let published = match fetch::fetch(source, &o.commit, &scratch.0, pack::FILE) {
+        Ok(p) => p,
+        Err(e) => return Standing::Unknown(e),
+    };
+    match std::fs::read_to_string(root.join(&o.rel)) {
+        Ok(have) if declares_the_same(&have, &published) => Standing::Current,
+        Ok(_) => Standing::Edited,
+        // `origins` read this file a moment ago, so this is a race or a
+        // permission change. Not an answer, and not reported as one.
+        Err(e) => Standing::Unknown(format!("{}: {}", o.rel, e)),
     }
 }
 
@@ -291,5 +452,181 @@ mod tests {
     #[test]
     fn a_file_with_no_banner_reads_as_unmarked() {
         assert!(provenance("aval: \"0.5.0\"\n").is_none());
+    }
+
+    // --- planning against what is on disk -----------------------------------
+
+    const BODY: &str = "\
+aval: \"1.3.0\"
+scopes: []
+keys:
+  \"stack.sql-layer\":
+    description: \"The SQL access layer\"
+records:
+  - id: \"ADR-0002\"
+    status: \"accepted\"
+    decisions:
+      - key: \"stack.sql-layer\"
+        choice: \"@effect/sql\"
+        first: true
+";
+
+    /// The registry a person wrote: a comment, a trailing comment on the very
+    /// line a migration rewrites, and a second pack that must not move.
+    const REGISTRY: &str = "\
+# ours
+dir: docs/adr
+packs:
+  - .adr/packs/fleet.yaml # the fleet's
+  - .adr/packs/other.pack
+scopes: []
+keys:
+";
+
+    /// A scratch root under the system temp directory. Never under this
+    /// worktree: the repository is itself a corpus, and a fixture registry
+    /// inside it is one a corpus walk could reach.
+    fn root(tag: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("aval-add-{}-{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(p.join(DIR)).expect("mkdir");
+        std::fs::write(p.join(load::REGISTRY), REGISTRY).expect("registry");
+        p
+    }
+
+    fn vendored(spec: &str) -> Vendored {
+        let source = fetch::parse_source(spec).expect("a source");
+        Vendored {
+            name: "fleet".into(),
+            rel: format!("{}/fleet.{}", DIR, EXT),
+            source,
+            id: "c0ffee1234567890".into(),
+            body: BODY.to_string(),
+            records: 1,
+            keys: vec!["stack.sql-layer".into()],
+        }
+    }
+
+    /// What 1.2 left behind: the same pack, from the same source, as `.yaml`.
+    fn old_yaml(root: &Path, v: &Vendored, id: &str) {
+        std::fs::write(
+            root.join(format!("{}/fleet.yaml", DIR)),
+            format!("{}{}", banner(&v.source, id), v.body),
+        )
+        .expect("write");
+    }
+
+    #[test]
+    fn a_pack_the_last_version_wrote_is_migrated_not_duplicated() {
+        let r = root("migrate");
+        let v = vendored("github:acme/decisions");
+        old_yaml(&r, &v, &v.id);
+
+        let Plan::Migrate { from, had } = plan(&r, &v).expect("planned") else {
+            panic!("a same-source .yaml is the file to move, not a second pack");
+        };
+        assert_eq!(from, ".adr/packs/fleet.yaml");
+        assert_eq!(had, v.id);
+
+        let p = Plan::Migrate { from, had };
+        assert_eq!(write(&r, &v, &p).expect("written"), Listed::Relisted);
+        assert!(r.join(&v.rel).is_file());
+        assert!(
+            !r.join(".adr/packs/fleet.yaml").exists(),
+            "leaving it would vendor the same decisions twice, under two names"
+        );
+        assert_eq!(
+            std::fs::read_to_string(r.join(load::REGISTRY)).unwrap(),
+            REGISTRY.replace("fleet.yaml", "fleet.pack"),
+            "only the one path moves; the comment and the other entry are the \
+             bytes the person wrote"
+        );
+        // And the migrated file is now what any later run compares against.
+        assert!(matches!(plan(&r, &v).expect("planned"), Plan::Unchanged));
+    }
+
+    #[test]
+    fn a_yaml_from_somewhere_else_is_still_a_collision() {
+        let r = root("collide");
+        let v = vendored("github:acme/decisions");
+        let other = vendored("github:other/decisions");
+        old_yaml(&r, &other, "0123456789abcdef");
+        let Plan::Collision { rel, other } = plan(&r, &v).expect("planned") else {
+            panic!("another source's file is not this pack's to move");
+        };
+        assert_eq!(rel, ".adr/packs/fleet.yaml", "the file the reader opens");
+        assert_eq!(other, "github:other/decisions");
+    }
+
+    #[test]
+    fn an_unmarked_yaml_is_a_collision_rather_than_something_to_move() {
+        let r = root("unmarked");
+        let v = vendored("github:acme/decisions");
+        std::fs::write(r.join(".adr/packs/fleet.yaml"), BODY).expect("write");
+        let Plan::Collision { rel, other } = plan(&r, &v).expect("planned") else {
+            panic!("nothing says where it came from, so nothing says it is ours");
+        };
+        assert_eq!(rel, ".adr/packs/fleet.yaml");
+        assert_eq!(other, "an unmarked file");
+    }
+
+    #[test]
+    fn a_formatter_that_went_over_the_file_changed_nothing() {
+        let r = root("formatted");
+        let v = vendored("github:acme/decisions");
+        // A formatter's output for this file: requoted values, blank lines
+        // between blocks, and a note of its own. Every declaration is the one
+        // the producer published.
+        let formatted = format!(
+            "{}{}",
+            banner(&v.source, &v.id),
+            "# formatted\n\naval: '1.3.0'\nscopes: []\n\nkeys:\n  \"stack.sql-layer\":\n    \
+             description: 'The SQL access layer'\n\nrecords:\n  - id: 'ADR-0002'\n    \
+             status: 'accepted'\n    decisions:\n      - key: 'stack.sql-layer'\n        \
+             choice: '@effect/sql'\n        first: true\n"
+        );
+        std::fs::write(r.join(&v.rel), &formatted).expect("write");
+
+        assert!(matches!(plan(&r, &v).expect("planned"), Plan::Unchanged));
+        assert_eq!(
+            write(&r, &v, &Plan::Unchanged).expect("written"),
+            Listed::Added
+        );
+        assert_eq!(
+            std::fs::read_to_string(r.join(&v.rel)).unwrap(),
+            formatted,
+            "an unchanged pack is left alone; rewriting it would fight the \
+             formatter on every run"
+        );
+    }
+
+    #[test]
+    fn a_changed_declaration_is_an_update_even_at_the_same_commit() {
+        let r = root("edited");
+        let v = vendored("github:acme/decisions");
+        std::fs::write(
+            r.join(&v.rel),
+            format!(
+                "{}{}",
+                banner(&v.source, &v.id),
+                BODY.replace("@effect/sql", "Kysely")
+            ),
+        )
+        .expect("write");
+        let Plan::Update(had) = plan(&r, &v).expect("planned") else {
+            panic!("a decision nobody published is not unchanged");
+        };
+        assert_eq!(had, v.id, "the commit is the same; the file is not");
+    }
+
+    #[test]
+    fn a_pack_that_is_not_there_yet_is_new() {
+        let r = root("new");
+        let v = vendored("github:acme/decisions");
+        assert!(matches!(plan(&r, &v).expect("planned"), Plan::New));
+        assert_eq!(write(&r, &v, &Plan::New).expect("written"), Listed::Added);
+        assert!(std::fs::read_to_string(r.join(load::REGISTRY))
+            .unwrap()
+            .contains("- .adr/packs/fleet.pack"));
     }
 }
