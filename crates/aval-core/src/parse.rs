@@ -19,7 +19,7 @@ const ENTRY_FIELDS: &[&str] = &[
     "overrides",
     "reason",
 ];
-const REGISTRY_FIELDS: &[&str] = &["dir", "sources", "packs", "scopes", "keys"];
+const REGISTRY_FIELDS: &[&str] = &["dir", "sources", "packs", "rules", "scopes", "keys"];
 const KEYDEF_FIELDS: &[&str] = &["description", "scopes"];
 
 fn a(check: &'static str, msg: impl Into<String>) -> Finding {
@@ -93,11 +93,7 @@ fn want_line(node: &Node, key: &str, file: &str, out: &mut Vec<Finding>) -> Opti
     // for "ignore previous instructions" is an arms race that fails open, and
     // a false positive on a legitimate choice is worse than the gap it closes.
     // Section 2.3 says where that risk is actually handled.
-    if let Some(c) = v.chars().find(|c| {
-        (c.is_control() && *c != '\n')
-            || ('\u{202A}'..='\u{202E}').contains(c)
-            || ('\u{2066}'..='\u{2069}').contains(c)
-    }) {
+    if let Some(c) = unprintable(&v) {
         out.push(
             a(
                 "frontmatter-parses",
@@ -585,6 +581,10 @@ pub fn registry(file: &str, src: &str) -> Result<Registry, Vec<Finding>> {
     // error, which is the property worth having.
     let sources = path_list(&doc, "sources", file, &mut out);
     let packs = path_list(&doc, "packs", file, &mut out);
+    // Rule files, under the same rule and for the same reason: a rule that
+    // stops being listed stops being printed at session start, and nobody is
+    // told it left.
+    let rules = path_list(&doc, "rules", file, &mut out);
 
     // `dir` is where this repository keeps its own records. A registry that
     // only vendors has none, and requiring it would make the cheapest way to
@@ -660,6 +660,7 @@ pub fn registry(file: &str, src: &str) -> Result<Registry, Vec<Finding>> {
             dir,
             sources,
             packs,
+            rules,
             scopes,
             keys,
         })
