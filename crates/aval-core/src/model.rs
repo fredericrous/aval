@@ -104,6 +104,116 @@ impl PartialEq<&str> for AdrId {
     }
 }
 
+/// How binding a rule is: SEMANTICS section 2.4.
+///
+/// Deliberately NOT `#[non_exhaustive]`, for the reason section 15.1 gives
+/// about `Status`: the two levels are part of the specification, the session
+/// hook prints one of them and fetches the other on demand, and a third would
+/// be a change to what a rule means rather than a new case to render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Level {
+    /// Followed; a review blocks on it.
+    Constraint,
+    /// Followed unless a reviewer argues why not, in that place.
+    Heuristic,
+}
+
+impl Level {
+    pub fn parse(s: &str) -> Option<Level> {
+        match s {
+            "constraint" => Some(Level::Constraint),
+            "heuristic" => Some(Level::Heuristic),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Level::Constraint => "constraint",
+            Level::Heuristic => "heuristic",
+        }
+    }
+}
+
+impl fmt::Display for Level {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One rule: a statement of practice, adopted by a record.
+///
+/// A rule has no authority of its own. It is active exactly while the record
+/// that `adopts` it is accepted and still holds, which is why the adopting
+/// record is a field and not a convention — the graph already tracks whether
+/// that record holds, so a rule needs no supersession edges of its own
+/// (SEMANTICS section 2.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Rule {
+    pub id: String,
+    pub level: Level,
+    /// The record that adopts it, local to the corpus that declares the rule.
+    pub adopts: AdrId,
+    /// The one line the hook and `aval rules` print. Never empty.
+    pub statement: String,
+    /// The explanation and translation. May be empty.
+    pub body: String,
+    pub source: Option<String>,
+    /// Repository-relative rules file, or the vendored pack file — the file in
+    /// *this* repository a reader can open, exactly as `Adr.file` is.
+    pub file: String,
+    pub pack: Option<String>,
+}
+
+impl Rule {
+    /// A rule with the fields the grammar requires, and nothing optional.
+    ///
+    /// The struct is `#[non_exhaustive]` (section 15.1), so this is how a
+    /// caller outside the crate starts one; the fields stay public and
+    /// writable, so it is a starting point rather than a builder.
+    pub fn new(
+        id: impl Into<String>,
+        level: Level,
+        adopts: AdrId,
+        statement: impl Into<String>,
+        file: impl Into<String>,
+    ) -> Rule {
+        Rule {
+            id: id.into(),
+            level,
+            adopts,
+            statement: statement.into(),
+            body: String::new(),
+            source: None,
+            file: file.into(),
+            pack: None,
+        }
+    }
+
+    /// Whether this rule came from a pack, and is therefore not this
+    /// repository's to edit. Findings about it say "re-add the pack".
+    pub fn is_vendored(&self) -> bool {
+        self.pack.is_some()
+    }
+}
+
+/// The first character that must not appear in text a person and an agent both
+/// read, or `None` when there is none.
+///
+/// SEMANTICS section 3.7: a C1 escape or a bidi override can make the text a
+/// reviewer reads differ from the text a model receives, and both a `choice`
+/// and a rule statement are reviewed by reading them. One function because two
+/// copies of this list are two lists that can disagree. A newline is not judged
+/// here — where it is an error, it is a different error with a better message.
+pub fn unprintable(s: &str) -> Option<char> {
+    s.chars().find(|c| {
+        (c.is_control() && *c != '\n')
+            || ('\u{202A}'..='\u{202E}').contains(c)
+            || ('\u{2066}'..='\u{2069}').contains(c)
+    })
+}
+
 /// What an entry says about its slot. Exactly one of the two, never both.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntryKind {
@@ -271,6 +381,10 @@ pub struct Registry {
     /// Vendored packs, as literal repository-relative paths. Each file was
     /// written by `aval add` and carries another repository's declarations.
     pub packs: Vec<String>,
+    /// Rule files, as literal repository-relative paths, for the reason
+    /// `sources` and `packs` are literal: a pattern that stops matching drops a
+    /// rule silently, and a rule nobody can see is one nobody follows.
+    pub rules: Vec<String>,
     pub scopes: Vec<String>,
     pub keys: Vec<KeyDef>,
 }
@@ -286,6 +400,7 @@ impl Registry {
             dir: dir.into(),
             sources: Vec::new(),
             packs: Vec::new(),
+            rules: Vec::new(),
             scopes: Vec::new(),
             keys: Vec::new(),
         }
@@ -391,16 +506,38 @@ impl fmt::Display for Finding {
 pub struct Corpus {
     pub registry: Registry,
     pub adrs: Vec<Adr>,
+    /// Every rule this corpus declares, local and vendored. Sorted by id at
+    /// load, so every listing is in one order without each caller sorting.
+    pub rules: Vec<Rule>,
 }
 
 impl Corpus {
     pub fn new(registry: Registry, adrs: Vec<Adr>) -> Corpus {
-        Corpus { registry, adrs }
+        Corpus {
+            registry,
+            adrs,
+            rules: Vec::new(),
+        }
+    }
+
+    /// The same corpus, carrying rules.
+    ///
+    /// Added beside `new` rather than as a third parameter: every existing
+    /// caller builds a corpus with no rules, and a corpus with none must stay
+    /// the cheapest thing to write — that is what keeps the whole feature
+    /// unreachable for a registry that declares no `rules`.
+    pub fn with_rules(mut self, rules: Vec<Rule>) -> Corpus {
+        self.rules = rules;
+        self
     }
 
     pub fn adr(&self, id: impl AsRef<str>) -> Option<&Adr> {
         let id = id.as_ref();
         self.adrs.iter().find(|a| a.id.as_str() == id)
+    }
+
+    pub fn rule(&self, id: &str) -> Option<&Rule> {
+        self.rules.iter().find(|r| r.id == id)
     }
 
     /// Every slot any entry occupies, sorted and deduplicated.

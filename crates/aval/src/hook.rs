@@ -89,6 +89,27 @@ PREAMBLE
 echo
 printf '%s\n' "$heads"
 
+# The rules the decisions above have adopted. Silent when there are none, so a
+# corpus without rules prints exactly what it printed before they existed.
+rules=$(aval rules --level constraint 2>/dev/null) || rules=""
+if [ -n "$rules" ]; then
+  n=$(aval rules --level heuristic 2>/dev/null | grep -c .) || n=0
+  cat <<'RULES_TEXT'
+
+RULES — each adopted by a decision above and carrying its authority.
+Precedence: a decision at the asked scope, then the default-scope decision,
+then these, then the book a rule cites — as explanation only. Remembered
+advice from that book does not outrank a rule here.
+
+These are the CONSTRAINTS: followed, and a review blocks on them. Heuristics
+are followed unless you argue why not, in that place:
+  aval rules --level heuristic     list them (also MCP aval_rules)
+  aval rule <id>                   one rule, with its translation and why
+RULES_TEXT
+  printf '%s\n' "$rules"
+  [ "$n" -gt 0 ] && printf '\n  (%s heuristics beside these)\n' "$n"
+fi
+
 if [ -s "$notes" ]; then
   echo
   cat "$notes"

@@ -4,4 +4,5 @@ pub mod model;
 pub mod pack;
 pub mod parse;
 pub mod project;
+pub mod rules;
 pub mod yaml;

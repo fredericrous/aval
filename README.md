@@ -150,10 +150,52 @@ different edges:
 | `aval heads [--write\|--check]` | the projection |
 | `aval show ADR-0015` | derived status, including partial supersession |
 | `aval history <key>` | the chain, labelled as history |
+| `aval rules [--level L] [--all]` | the rules the decisions have adopted, one line each |
+| `aval rule <id>` | one rule, with its translation and why |
 | `aval hook install [--check]` | put the heads in front of an agent at session start |
 | `aval pack [--write\|--check]` | publish this corpus's declarations for others to read |
 | `aval add <source>… [--dry-run]` | vendor another repository's declarations |
 | `aval add --check` | are the vendored packs still what their revisions name |
+
+## Rules: what a decision does not settle
+
+A decision settles *what* is used. How the code that uses it is written gets
+answered the way the first question used to be — a paragraph restated in six
+`CLAUDE.md` files, one already wrong, and whatever a model remembers of a book.
+So a **rule** is written once, in a markdown file whose headings are the
+declarations, and it is **adopted by a record**:
+
+```markdown
+---
+adopts: ADR-0011
+source: Clean Code (Robert C. Martin, 2008)
+---
+
+## names.reveal-intent [constraint]
+
+Names reveal intention: an identifier says what it holds, in the vocabulary
+of the domain, and a reader never decodes an abbreviation.
+
+The body is the translation — what this means here, and what it does not cover.
+```
+
+A rule has no authority of its own: it is active exactly while the record that
+adopts it still holds, so superseding that record retires its rules with it.
+There are no per-rule supersession edges, because the graph already tracks the
+record — a rule whose meaning changes gets a new id.
+
+```console
+$ aval rules
+constraint names.reveal-intent   Names reveal intention: an identifier says what it holds …
+heuristic  functions.few-arguments   A function takes no more inputs than it uses …
+```
+
+A `constraint` is followed and a review blocks on it; the session hook prints
+every active one. A `heuristic` is followed unless a reviewer argues why not,
+in that place, and is fetched on demand. Precedence, which the hook also
+prints: the decision at the scope asked, then the default-scope decision, then
+these rules, then the book a rule cites — as explanation only. Remembered
+advice from that book does not outrank a rule here.
 
 ## Sharing one decision across repositories
 

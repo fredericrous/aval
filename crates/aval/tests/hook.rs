@@ -220,6 +220,105 @@ fn the_hook_prints_the_heads_and_the_preamble() {
     );
 }
 
+/// The rules block: printed under the heads when the corpus has constraints,
+/// absent when it has none, and carrying the precedence a caller needs to read
+/// a rule against a decision.
+#[test]
+fn the_hook_prints_the_constraints_and_counts_the_heuristics() {
+    let r = scratch("rules");
+    fs::write(
+        r.join(".adr.yaml"),
+        "dir: docs/adr\nrules:\n  - docs/p/book.md\nscopes: []\nkeys:\n  a.b:\n",
+    )
+    .unwrap();
+    fs::create_dir_all(r.join("docs/p")).unwrap();
+    fs::write(
+        r.join("docs/p/book.md"),
+        "---\nadopts: ADR-0001\n---\n\
+         ## names.reveal-intent [constraint]\n\nNames reveal intention.\n\n\
+         ## functions.few-arguments [heuristic]\n\nFew arguments.\n",
+    )
+    .unwrap();
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+
+    let dir = Path::new(bin()).parent().unwrap().display().to_string();
+    let got = sh(
+        &r,
+        Some(&format!("{}:{}", dir, std::env::var("PATH").unwrap())),
+    );
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(
+        got.out.contains("RULES — each adopted by a decision"),
+        "{}",
+        got.out
+    );
+    assert!(
+        got.out.contains("does not outrank a rule here"),
+        "{}",
+        got.out
+    );
+    assert!(got.out.contains("names.reveal-intent"), "{}", got.out);
+    // The heuristic is counted, not printed: it is fetched on demand.
+    assert!(!got.out.contains("Few arguments."), "{}", got.out);
+    assert!(
+        got.out.contains("(1 heuristics beside these)"),
+        "{}",
+        got.out
+    );
+    // The heads still come first, and the preamble is untouched.
+    assert!(
+        got.out.find("ARCHITECTURE DECISIONS") < got.out.find("RULES —"),
+        "{}",
+        got.out
+    );
+}
+
+/// A corpus with no rules prints exactly what it printed before rules existed.
+#[test]
+fn the_hook_says_nothing_about_rules_when_there_are_none() {
+    let r = scratch("no-rules");
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    let dir = Path::new(bin()).parent().unwrap().display().to_string();
+    let got = sh(
+        &r,
+        Some(&format!("{}:{}", dir, std::env::var("PATH").unwrap())),
+    );
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(got.out.contains("| a.b |"), "{}", got.out);
+    assert!(!got.out.contains("RULES"), "{}", got.out);
+}
+
+/// The script's bytes are its version. A consumer holding the 1.1.0 script is
+/// told it is stale, which is the only mechanism there is for shipping a change
+/// to it.
+#[test]
+fn the_1_1_0_script_reads_as_stale() {
+    let r = scratch("stale-script");
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+
+    let current = aval::hook::SCRIPT;
+    let start = current
+        .find("# The rules the decisions")
+        .expect("the rules block");
+    let end = current
+        .find("if [ -s \"$notes\" ]")
+        .expect("the notes block");
+    let previous = format!("{}{}", &current[..start], &current[end..]);
+    assert_ne!(
+        previous, current,
+        "the fixture must differ, or this asserts nothing"
+    );
+    fs::write(r.join(".claude/hooks/aval-heads.sh"), &previous).unwrap();
+
+    let got = run(&r, &["hook", "install", "--check"]);
+    assert_eq!(got.code, 1, "{}{}", got.out, got.err);
+    assert!(got.out.contains("stale"), "{}", got.out);
+    assert!(got.out.contains("out of date"), "{}", got.out);
+
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    assert_eq!(run(&r, &["hook", "install", "--check"]).code, 0);
+}
+
 /// The property that makes this safe to commit: a session must not fail, or
 /// even complain, because the person who started it has not installed aval.
 #[test]

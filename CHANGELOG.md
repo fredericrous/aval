@@ -2,6 +2,92 @@
 
 ## Unreleased
 
+## v1.2.0
+
+Rules. A decision settles *what* is used; it never settled how the code that
+uses it is written, and that second question was being answered the way the
+first one used to be — a paragraph restated in six `CLAUDE.md` files, one of
+them already wrong, and whatever a model remembered of a book it read in
+training. A rule is now written once, in one file, adopted by a record, and it
+stops being active when that record does.
+
+**Two things to do after upgrading**, both because a format grew:
+
+- a producer re-runs `aval pack --write` and each of its consumers re-runs
+  `aval add`. A pack carrying `rules:` is unreadable by aval before 1.2 —
+  `pack-parses: unknown pack field` — which is the existing version gate
+  refusing a file it cannot fully understand rather than reading half of it, so
+  upgrade consumers before publishing rules to them;
+- everybody re-runs `aval hook install`. The session-start script gained the
+  rules block; its bytes are its version, and `aval hook install --check`
+  reports it stale until it is reinstalled.
+
+Neither is urgent for a corpus that declares no rules: every check added here
+needs a `rules:` in a registry to reach anything at all, so such a corpus
+cannot tell this version from the last one. That is what makes this minor.
+
+### Added
+
+- **Rules.** A registry may list rule files:
+
+  ```yaml
+  rules:
+    - docs/principles/clean-code.md
+  ```
+
+  A rule file is markdown with frontmatter naming the record that `adopts` it,
+  and headings that are the declarations: `## <id> [constraint]` or
+  `## <id> [heuristic]`, the first paragraph under the heading being the one
+  line that gets printed, the rest being the translation. Literal paths, as
+  `sources` and `packs` are, so a rule file that stops being listed is an error
+  rather than a constraint that quietly stopped being printed.
+
+  A rule carries the authority of its adopting record and no authority of its
+  own: it is active while that record is accepted and still holds, and inactive
+  — **not wrong** — once it is superseded, retired or still a draft. There are
+  deliberately no per-rule supersession edges; a rule whose meaning changes
+  gets a new id. SEMANTICS §2.4 is normative.
+
+- **`aval rules` and `aval rule <id>`.** `rules` lists what is adopted, one
+  line each, constraints before heuristics, `--level`, `--adopted-by` and
+  `--all` to filter; exit 0 even when the list is empty, because an empty list
+  is an answer. `rule` prints one rule with its body and the derived status of
+  the record that adopts it; exit 7 with an advisory did-you-mean for an id the
+  corpus does not declare, the same shape `show` uses.
+
+- **`aval_rules` and `aval_rule` MCP tools**, both read-only, both requiring
+  `repo` in a workspace. Their descriptions carry what a caller cannot infer:
+  that a rule is adopted by a decision and carries its authority, and where it
+  sits against the source it cites — a decision at the scope asked, then the
+  default-scope decision, then the rule, then the book, as explanation only.
+
+- **The session hook prints the constraints**, under the heads, with that
+  precedence and a count of the heuristics beside them. Heuristics are fetched
+  on demand rather than injected: advice that is right to break does not belong
+  in every session's opening context. Silent when a corpus has no rules.
+
+- **Packs carry rules**, with their bodies, sorted by id. A rule body is the
+  one piece of prose a pack carries, and SEMANTICS §2.3's "a pack MUST NOT
+  carry prose" is now "MUST NOT carry a record's body": a rule body is a
+  declaration, printed nowhere by default and fetched by id, and a rule a
+  consumer can list but cannot explain is one it cannot apply. `adopts` is
+  qualified with the pack name on read, exactly as `replaces` is. A pack never
+  re-exports vendored rules.
+
+- **Three Layer A checks** — `rules-parse`, `rule-id-unique`,
+  `rule-adopts-resolves` — and Layer C's `links-resolve` now runs over rule
+  files too, since a rule body cites the code it is about.
+
+### Fixed
+
+- **A literal block scalar lost blank lines and any line beginning with `#`.**
+  The lexer drops blank lines and whole-line comments, which is right
+  everywhere except inside a block scalar, where both are content: a markdown
+  body carried through `body: |` came back with its paragraphs run together and
+  its `###` sub-headings deleted, silently, because the value still parsed.
+  Folding now treats a blank line as a paragraph break rather than a double
+  space, and `|` emits no trailing newline for an empty block.
+
 ## v1.1.0
 
 A workspace of corpora. `aval mcp` started from a directory with no corpus

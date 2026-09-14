@@ -42,6 +42,7 @@ pub fn render(l: &Loaded) -> String {
     let c = l.graph.corpus();
     let mut own = c.clone();
     own.adrs.retain(|a| !a.is_vendored());
+    own.rules.retain(|r| !r.is_vendored());
     own.registry.keys.retain(|k| {
         !l.packs
             .iter()

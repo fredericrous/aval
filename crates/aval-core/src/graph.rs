@@ -195,6 +195,7 @@ impl Graph {
         check_edges(&corpus, &mut f);
         check_retirements(&corpus, &mut f);
         check_cycles(&corpus, &mut f);
+        check_rules(&corpus, &mut f);
         if f.is_empty() {
             Ok(Graph { corpus })
         } else {
@@ -379,6 +380,43 @@ impl Graph {
             .iter()
             .map(|e| (e, self.heads(e.slot()).iter().any(|(a, _)| a.id == adr.id)))
             .collect()
+    }
+
+    /// Why a rule is not active, or `None` when it is.
+    ///
+    /// A rule has no status of its own: it is active exactly while the record
+    /// that adopts it is accepted and still holds. That is the whole reason
+    /// there are no per-rule supersession edges — the graph already tracks the
+    /// record, so tracking the rule too would be a second copy of the same
+    /// fact, and the second copy is the one that goes stale.
+    ///
+    /// A draft's rules are inactive: a proposal's rules bind nobody until the
+    /// proposal is accepted. `partially-superseded` stays active, because the
+    /// record still decides something and the reader can see which entries.
+    ///
+    /// Deliberately not a check. A rule adopted by a superseded record is
+    /// **inactive, not wrong** — the ordinary end of a rule's life is the
+    /// record that adopted it being replaced — so `aval rules --all` shows it
+    /// with this reason and `check` says nothing.
+    /// The reason is the predicate only — `is superseded` — because the subject
+    /// is `r.adopts`, which the caller already has; `rule_reason` joins the two
+    /// so every surface says it the same way.
+    pub fn rule_active(&self, r: &Rule) -> Option<&'static str> {
+        let Some(adr) = self.corpus.adr(&r.adopts) else {
+            return Some("is unknown");
+        };
+        match self.derived_status(adr) {
+            DerivedStatus::Active | DerivedStatus::PartiallySuperseded => None,
+            DerivedStatus::Draft => Some("is a draft"),
+            DerivedStatus::Superseded => Some("is superseded"),
+            DerivedStatus::Empty => Some("decides nothing"),
+        }
+    }
+
+    /// Why a rule is inactive, as one sentence, or `None` when it is active.
+    pub fn rule_reason(&self, r: &Rule) -> Option<String> {
+        self.rule_active(r)
+            .map(|why| format!("adopting record {} {}", r.adopts, why))
     }
 
     /// Layer B. Every slot carrying more than one head.
@@ -568,6 +606,74 @@ fn check_retirements(c: &Corpus, out: &mut Vec<Finding>) {
                     .at(adr.file.clone(), e.line),
                 ),
             }
+        }
+    }
+}
+
+/// The two Layer A facts about rules that need more than one file.
+///
+/// Both fire only where a corpus declares rules at all, which is what makes
+/// 1.2.0 a MINOR release: on a corpus with no `rules:` in its registry there is
+/// nothing to iterate and no verdict can change.
+fn check_rules(c: &Corpus, out: &mut Vec<Finding>) {
+    for (i, r) in c.rules.iter().enumerate() {
+        // One id, one rule, across every rules file and every vendored pack —
+        // the same rule as keys, and for the same reason: a consumer that
+        // re-declares a rule the fleet declares has two statements of one
+        // practice, and nothing keeps them in step. The finding lands on the
+        // local file where one of the two is local.
+        if let Some(prev) = c.rules[..i].iter().find(|p| p.id == r.id) {
+            let (at, other) = if r.is_vendored() && !prev.is_vendored() {
+                (prev, r)
+            } else {
+                (r, prev)
+            };
+            out.push(
+                a(
+                    "rule-id-unique",
+                    format!(
+                        "`{}` is already declared by {}{}",
+                        r.id,
+                        other.file,
+                        match &other.pack {
+                            Some(p) => format!(
+                                ", vendored from the `{}` pack; a vendored rule is \
+                                 not re-declared locally",
+                                p
+                            ),
+                            None => String::new(),
+                        }
+                    ),
+                )
+                .in_file(at.file.clone()),
+            );
+        }
+
+        // A rule's authority is its adopting record's, so the record has to be
+        // one this corpus can see. A LOCAL rule must adopt a local record: a
+        // consumer stating the fleet's rules would be claiming authority it
+        // does not have, and the fleet's own rules arrive through its pack.
+        match c.adr(&r.adopts) {
+            None => out.push(
+                a(
+                    "rule-adopts-resolves",
+                    format!("`adopts: {}` names no record in this corpus", r.adopts),
+                )
+                .in_file(r.file.clone()),
+            ),
+            Some(adr) if adr.is_vendored() && !r.is_vendored() => out.push(
+                a(
+                    "rule-adopts-resolves",
+                    format!(
+                        "`adopts: {}` is a vendored record; a rule is adopted by a \
+                         record of this corpus's own, and another repository's \
+                         rules arrive with its pack",
+                        r.adopts
+                    ),
+                )
+                .in_file(r.file.clone()),
+            ),
+            Some(_) => {}
         }
     }
 }

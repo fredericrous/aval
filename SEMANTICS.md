@@ -1,6 +1,6 @@
 # `aval` — normative semantics
 
-Version 1.1.0. This document is the specification. Where an
+Version 1.2.0. This document is the specification. Where an
 implementation and this document disagree, this document is right and the
 implementation is a bug.
 
@@ -75,6 +75,10 @@ keys:
   projection.
 - `sources` — additional records, named outright (§2.2). Optional.
 - `packs` — vendored declarations from other repositories (§2.3). Optional.
+- `rules` — rule files, named outright (§2.4). Optional. A rule is a statement
+  of practice adopted by a record, so listing the files here is still declaring
+  vocabulary: what the rule says binds only while the record that adopts it
+  holds, and the record is where that is reviewed.
 - `scopes` — the closed scope vocabulary. `*` is always valid and MUST NOT be
   listed.
 - `keys` — the closed key vocabulary. `description` is for humans and for the
@@ -171,9 +175,9 @@ packs:
 
 #### What a pack carries
 
-A pack carries **declarations**: the scope vocabulary, the key definitions, and
-every record's frontmatter. It MUST NOT carry a projection, and it MUST NOT
-carry prose.
+A pack carries **declarations**: the scope vocabulary, the key definitions,
+every record's frontmatter, and the rules those records adopt (§2.4). It MUST
+NOT carry a projection, and it MUST NOT carry a record's body.
 
 `HEADS.md` is derived state, and §10's `no-manual-index` exists because copied
 derived state has no invariant behind it — nothing knows that a row which
@@ -284,6 +288,166 @@ on one forge and read by repositories on another.
 The consequence is a real cost and is stated rather than hidden: when a fleet
 decision changes, each consumer is updated by a person running `aval add`
 again, and reading the diff.
+
+### 2.4 Rules
+
+A decision settles *what* is used. It does not settle *how* the code that uses
+it is written, and that second question is answered today the way the first one
+used to be: by a paragraph restated in six `CLAUDE.md` files, one of which is
+already wrong, and by whatever a model remembers of a book it read in training.
+Both failures are the one this corpus exists to end, so the same treatment
+applies — write it once, in one place, with something that can say whether it
+still holds.
+
+A **rule** is a one-line statement of practice with a stable id, a level, a
+body that explains and translates it, and **the record that adopts it**.
+
+**A rule has no authority of its own.** It is active exactly while the record
+that adopts it is accepted and still holds — derived status `active` or
+`partially superseded` (§8). When that record is superseded or retired, every
+rule it adopted stops being active with it. This is the whole design: a rule
+that could be authoritative on its own would need its own status, its own
+supersession edges and its own review, and the second copy of "does this still
+hold" is the copy that goes stale.
+
+Two levels, and the difference is what a reviewer does with them:
+
+- `constraint` — followed; a review blocks on it. The session hook prints every
+  active constraint, because a constraint nobody is shown is one nobody
+  follows.
+- `heuristic` — followed unless a reviewer argues why not, **in that place**.
+  Fetched on demand, never injected: a heuristic printed at every session start
+  would spend context on advice that is right to break.
+
+**Precedence**, highest first, stated here and printed by the hook:
+
+1. a decision at the scope asked — `aval resolve <key> --scope S`;
+2. the default-scope decision it inherits from (§5);
+3. an adopted rule;
+4. the source a rule cites — a book, a specification — as **explanation only**.
+
+The fourth line is the one that has to be written down. A rule restates a
+source in this estate's terms, and the restatement is what was agreed to; the
+source is why. An agent invoking remembered book advice against a written rule
+is not citing an authority, it is **contradicting a decision**.
+
+#### Rule files
+
+The registry lists rule files as literal repository-relative paths, exactly as
+`sources` and `packs` are listed and for the same reason (§2.2): a pattern that
+stops matching drops a rule silently, and nobody is told that a constraint left.
+
+```yaml
+rules:
+  - docs/principles/clean-code.md
+  - docs/principles/clean-architecture.md
+```
+
+A rule file is markdown with YAML frontmatter. It is one document, written for
+a person, whose headings are also the declarations — because the alternative is
+a list of rules beside a file explaining them, which is two files that drift.
+
+```markdown
+---
+adopts: ADR-0011
+source: Clean Code (Robert C. Martin, 2008)
+---
+
+# Clean Code, restated
+
+Intro prose. Anything before the first rule heading is for the reader.
+
+## names.reveal-intent [constraint]
+
+Names reveal intention: an identifier says what it holds, in the vocabulary
+of the domain, and a reader never decodes an abbreviation.
+
+Body. Free markdown until the next `## ` heading, `###` sub-headings and code
+included.
+```
+
+- Frontmatter carries `adopts` (REQUIRED; a record id local to this corpus,
+  never a vendored `pack:ADR` id — a consumer does not state the fleet's rules)
+  and `source` (optional, one line, printable per §3.7). An unknown field is a
+  Layer A error, as in ADR frontmatter and for §3.2's reason.
+- A rule starts at a line matching `## <id> [<level>]` **exactly**: two hashes,
+  one space, the id, one space, the level in square brackets, nothing else.
+  `<level>` is `constraint` or `heuristic`.
+- `<id>` follows the key grammar of §1.1 — lowercase ASCII letters, digits and
+  `-`, in `.`-joined segments, at least two. Rule ids and decision keys are
+  **separate namespaces**; a rule id equal to a key is not an error, because
+  the two are never looked up in the same place.
+- The **statement** is the first paragraph under the heading: the first
+  non-blank line and every line up to the first blank one, joined with single
+  spaces. It MUST be non-empty and printable (§3.7). It is the one line the
+  hook and `aval rules` print, so it is joined rather than kept as written — a
+  hard wrap is typography, not part of what the rule says.
+- The **body** is everything after that paragraph up to the next rule heading
+  or end of file, trimmed. It may be empty, and it MUST be printable (§3.7):
+  it travels in a pack and reaches an agent through `aval rule`, so the text a
+  reviewer reads has to be the text a model receives.
+- A `## ` line that does not match the grammar is a **parse error naming the
+  line**, and so is a `# ` heading after the first rule. Neither may quietly
+  become body text: a missing bracket or a misspelled level would fold a rule
+  into the previous rule's body, where it is still perfectly readable prose, so
+  a reviewer sees a rule and the tool has none. Fenced code is exempt from
+  both — a `## ` inside a fence is an example, and a check that cried wolf on
+  sample code would be switched off, and then it would catch nothing.
+- A file listed in `rules` that declares no rule is an error.
+
+#### History, and changing a rule
+
+**A rule's text history is git.** §2.2 already makes this argument for a
+specification rewritten in place: a document that carries its decisions has its
+history in the commit log, and that is a legitimate shape rather than a lesser
+one. A rule file is that shape.
+
+**A rule whose meaning changes gets a NEW id, and the old id is removed.**
+There are deliberately no per-rule supersession edges. A rule's authority is
+its adopting record's, and that record is what the graph tracks — adding a
+second lineage for rules would mean two graphs, and the failure the first one
+exists to prevent is precisely two answers to one question. Changing what an id
+means without changing the id is the one move that cannot be reviewed: every
+consumer that vendored it keeps the old words under the new agreement.
+
+A change of **level** is an edit, reviewed in the pull request and visible to
+consumers in the pack diff. Promoting a heuristic to a constraint is a decision
+about how much a review blocks, which is exactly what a pull request is for.
+
+#### Rules in a pack
+
+`aval pack --write` emits a `rules:` section after `records:`, sorted by id,
+each rule carrying its statement **and its body**. A rule body is the one piece
+of prose a pack carries, and it is not a counter-example to "a pack MUST NOT
+carry a record's body": it is a declaration in its own right, it is printed
+nowhere by default and fetched by id, and a rule a consumer can list but cannot
+explain is one it cannot apply. The "inert" paragraph of §2.3 governs what
+happens when that text reaches a model, exactly as it does for a `choice`.
+
+On read, `adopts` is qualified with the pack name (`decisions:ADR-0011`)
+exactly as `replaces` and `overrides` are, and only when it names a record
+inside the pack. A vendored rule's file is the pack file, like a vendored
+record's. A pack MUST NOT re-export vendored rules, for §2.3's reason.
+
+A consumer MUST NOT re-declare a rule a pack declares. That is
+`rule-id-unique`, and it is the same rule as keys: two statements of one
+practice, with nothing keeping them in step.
+
+#### What is checked, and what is not
+
+Three Layer A checks, listed in §10. Each fires only where a registry declares
+`rules`, so a corpus that has none cannot tell this version from the one
+before it.
+
+**Activity is not a check.** A rule adopted by a superseded record is
+**inactive, not wrong** — being replaced with its record is the ordinary end of
+a rule's life, and reporting it would ask an author to delete the history of
+how the estate used to be written. `aval rules --all` shows it with the reason;
+`check` says nothing.
+
+Layer C's `links-resolve` runs over rule files: they are documents of this
+repository, a body cites the code it is about, and a citation that rots there
+misleads exactly as much as one in a record.
 
 ---
 
@@ -701,6 +865,9 @@ answering a question.
 | `retire-names-predecessor` | a retirement not matching either branch of §6.1 |
 | `no-accepted-replaces-draft` | an accepted entry replacing a draft entry (§7) |
 | `overrides-well-placed` | `overrides` on a `*`-scoped entry (§3.5) |
+| `rules-parse` | a rules file whose frontmatter, heading grammar or statement is malformed (§2.4) |
+| `rule-id-unique` | one rule id declared twice, across every rules file and every vendored pack (§2.4) |
+| `rule-adopts-resolves` | `adopts` naming no record of this corpus's own (§2.4) |
 
 ### Layer B — verdicts
 
@@ -714,7 +881,7 @@ answering a question.
 |---|---|
 | `heads-fresh` | `HEADS.md` not matching the projection after canonicalisation (§12.2) |
 | `pack-fresh` | a published `aval.pack` not matching the declarations this corpus states (§2.3) |
-| `links-resolve` | an unpinned citation that does not resolve (§11) |
+| `links-resolve` | an unpinned citation that does not resolve (§11), in a record or in a rules file |
 | `status-single-source` | a prose status line claiming approval the frontmatter already owns |
 | `no-manual-index` | a hand-maintained ADR index table |
 | `override-undeclared` | a scoped entry diverging from a global head without `overrides` |
@@ -926,8 +1093,10 @@ Low codes follow the duro CLI. Verdicts start at 4.
 | `aval add` | A | `0` · `1` unreachable, ambiguous, or refused · `2` · `3` |
 | `aval add --check` | A | `0` current or unknown · `1` behind · `2` · `3` |
 | `aval keys` | A | `0` · `2` · `3` |
+| `aval rules` | A | `0` · `2` · `3` |
+| `aval rule` | A | `0` found · `2` · `3` · `7` unknown |
 | `aval repos` | — | `0` · `2` · `3` nothing found, or the directory unreadable |
-| `--all-repos` on `resolve` / `keys` / `heads` / `history` | A per member | `0` every member loaded, none exited 5 · `1` a member exited 5 or did not load · `2` with `--write`, `--check`, or on `show` · `3` no member loaded |
+| `--all-repos` on `resolve` / `keys` / `heads` / `history` / `rules` | A per member | `0` every member loaded, none exited 5 · `1` a member exited 5 or did not load · `2` with `--write`, `--check`, or on `show` or `rule` · `3` no member loaded |
 | `aval mcp` | — at startup | `0` stdin closed · `1` transport failure · `2` |
 
 `hook install` reads no corpus and touches no layer. It wires a session-start
@@ -1013,6 +1182,16 @@ corpus the map has one member; the shape never depends on the count.
 under-specified rather than unanswered — a protocol error naming the
 repositories, not eight near-misses reported as answers.
 
+`aval_rules` and `aval_rule` are the rule surface (§2.4). `aval_rules` lists
+what is adopted, one line each and no bodies; `aval_rule` carries the body,
+which is where a rule is narrowed to this estate and where the cases it
+deliberately does not cover are written down. Their descriptions MUST state
+whose authority a rule carries and where it sits in §2.4's precedence — a
+caller that does not know it is weighing an adopted rule against a remembered
+book, and the book is what it will pick. `aval_rule` needs `repo` in a
+workspace because rule ids are corpus-local, as record ids are; `aval_rules`
+needs it for the size reason below.
+
 `aval_keys` and `aval_heads` need `repo` too, for a different reason. A tool
 result is paid for in context, every repository's heads at once is tens of
 kilobytes, and a caller that forgot the name must get a protocol error listing
@@ -1076,6 +1255,20 @@ This document is versioned with the tool.
 
 A change to the conformance fixtures is the signal that behaviour moved.
 
+**1.2.0 is minor, and here is the argument.** It adds an optional registry
+field (`rules`), two commands, two tools, three checks and a pack section.
+Every one of the three checks needs a `rules:` in a registry to reach anything
+at all, so on a corpus that declares none they cannot fire and no verdict
+moves — which is the test the rule above actually sets. Two things a consumer
+does have to do, both stated in the changelog: a producer re-runs `aval pack
+--write` and each consumer re-runs `aval add`, and everybody re-runs `aval hook
+install`, because the script's bytes are its version and `--check` reports it
+stale until they do. One forward-compatibility limit is accepted rather than
+worked around: a pack carrying `rules:` is unreadable by aval before 1.2 —
+`pack-parses: unknown pack field` — which is the existing version gate doing
+what it exists to do, refusing a file it cannot fully understand rather than
+reading half of it.
+
 **From 1.0 those words mean what semver says they mean.** Before it, a breaking
 change shipped as a minor bump, which is the 0.x convention — and is why §3.7's
 printable-value rule, which is breaking, is what made this release 1.0 rather
@@ -1109,11 +1302,11 @@ They are not the same promise, and the difference decides where
 `#[non_exhaustive]` belongs.
 
 - **A struct may gain a field.** `Entry`, `Adr`, `KeyDef`, `Registry`,
-  `Corpus` and `Finding` are `#[non_exhaustive]`, so a field can be added
+  `Corpus`, `Rule` and `Finding` are `#[non_exhaustive]`, so a field can be added
   without breaking a downstream build, and a caller outside the crate starts
   one through a constructor.
 - **An enum's variants are part of the specification.** `Verdict`, `Unknown`,
-  `Status`, `EntryKind`, `Lineage`, `Layer` and `DerivedStatus` are
+  `Status`, `Level`, `EntryKind`, `Lineage`, `Layer` and `DerivedStatus` are
   deliberately NOT marked. Section 14 enumerates the verdicts and their exit
   codes: adding one is a major change by the rule above, whatever the type
   system says. Marking them would buy flexibility this document has already

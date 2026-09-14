@@ -34,6 +34,14 @@ pub struct Loaded {
     /// checked where it was written. Keeping it out of this list is what makes
     /// every Layer C check skip it without knowing packs exist.
     pub files: Vec<(String, String)>,
+    /// `(repository-relative path, source)` for every rules file read.
+    ///
+    /// Separate from `files` rather than appended to it, because the two are
+    /// read by different checks. A rules file is a document of this repository
+    /// and its citations are checked like a record's, but it is not a record:
+    /// `status-single-source` is about a document that claims approval twice,
+    /// and a rules file claims none.
+    pub rule_files: Vec<(String, String)>,
     /// Vendored packs, in registry order.
     pub packs: Vec<Pack>,
 }
@@ -283,6 +291,31 @@ pub fn load(from: &Path) -> Result<Loaded, LoadError> {
         return Err(LoadError::Invalid(findings));
     }
 
+    // Rule files, after the records and before the graph: a rule names the
+    // record that adopts it, and `rule-adopts-resolves` needs both in hand.
+    // Listed literally, like `sources` and `packs`, so a rules file that stops
+    // being listed is an error rather than a set of constraints that quietly
+    // stopped being printed at session start.
+    let mut rules = Vec::new();
+    let mut rule_files = Vec::new();
+    for rel in &registry.rules {
+        let path = root.join(rel);
+        let src = fs::read_to_string(&path).map_err(|e| {
+            LoadError::Unreadable(format!(
+                "{}: listed in `rules` and not a readable file ({})",
+                rel, e
+            ))
+        })?;
+        match aval_core::rules::parse(&normalise(rel), &src) {
+            Ok(rs) => rules.extend(rs),
+            Err(mut x) => findings.append(&mut x),
+        }
+        rule_files.push((normalise(rel), src));
+    }
+    if !findings.is_empty() {
+        return Err(LoadError::Invalid(findings));
+    }
+
     // Vendored records join the graph as records, not as a second tier. That
     // is the point: a local record deciding a slot a pack already decides is
     // two heads for one slot, which is the contradiction `check` already
@@ -290,15 +323,24 @@ pub fn load(from: &Path) -> Result<Loaded, LoadError> {
     // stop a consumer quietly re-deciding a fleet key.
     for p in &packs {
         adrs.extend(p.adrs.iter().cloned());
+        // A vendored rule is a rule of this corpus, exactly as a vendored
+        // record is a record of it: the fleet's constraints bind the consumer,
+        // which is the whole reason for vendoring them.
+        rules.extend(p.rules.iter().cloned());
     }
+    // One order, decided here, so every listing agrees without each caller
+    // sorting — and so a `rule-id-unique` finding names the same file twice
+    // running.
+    rules.sort_by(|a, b| a.id.cmp(&b.id));
 
-    let corpus = Corpus::new(registry, adrs);
+    let corpus = Corpus::new(registry, adrs).with_rules(rules);
     let graph = Graph::build(corpus).map_err(LoadError::Invalid)?;
     Ok(Loaded {
         graph,
         root,
         adr_dir,
         files,
+        rule_files,
         packs,
     })
 }
