@@ -98,8 +98,23 @@ pub fn bad_name(name: &str) -> Option<String> {
 /// the point of this file is that what the producer decided is what the
 /// consumer reads. Quoting unconditionally costs two bytes and removes the
 /// whole class.
+///
+/// Double quotes, unless the value holds more double quotes than single ones;
+/// then single quotes, with `'` doubled. That is the choice prettier makes
+/// for YAML, and it matters because a vendored pack lives in repositories
+/// whose pre-commit hook runs prettier over everything: the first pack that
+/// carried a rule statement with a quoted word inside it was rewritten by the
+/// formatter in three consumers in one afternoon, and a generated file that a
+/// formatter rewrites is a file that gets hand-edited. Emitting the quoting
+/// the formatter would choose makes it a no-op instead.
 fn out(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\\\""))
+    let doubles = s.matches('"').count();
+    let singles = s.matches('\'').count();
+    if doubles > singles {
+        format!("'{}'", s.replace('\'', "''"))
+    } else {
+        format!("\"{}\"", s.replace('"', "\\\""))
+    }
 }
 
 /// A block sequence, or `[]` when there is nothing to list.
@@ -755,6 +770,9 @@ mod tests {
             "A\\|B",
             "back\\slash",
             "quote\"inside",
+            "it's",
+            "it's \"both\" here",
+            "'leading and trailing'",
             "true",
             "[not, a, list]",
             "colon: here",
@@ -784,6 +802,9 @@ mod tests {
                 "A\\|B",
                 "back\\slash",
                 "quote\"inside",
+                "it's",
+                "it's \"both\" here",
+                "'leading and trailing'",
                 "true",
                 "[not, a, list]",
                 "colon: here",
@@ -791,6 +812,19 @@ mod tests {
                 "# leading hash",
             ]
         );
+    }
+
+    #[test]
+    fn quoting_is_the_style_prettier_would_choose() {
+        // A formatter that rewrites a generated file turns it into a file
+        // that gets hand-edited; emitting prettier's own choice makes the
+        // formatter a no-op. More double quotes than single: single-quoted,
+        // with the single quote doubled. Otherwise double-quoted.
+        assert_eq!(out("plain"), "\"plain\"");
+        assert_eq!(out("say \"hi\""), "'say \"hi\"'");
+        assert_eq!(out("it's"), "\"it's\"");
+        assert_eq!(out("it's \"both\" here"), "'it''s \"both\" here'");
+        assert_eq!(out("a \"b\" 'c' 'd'"), "\"a \\\"b\\\" 'c' 'd'\"");
     }
 
     #[test]
