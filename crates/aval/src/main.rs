@@ -905,6 +905,18 @@ fn cmd_add(args: &Args) -> i32 {
         }
     }
 
+    // Two sources that resolve to one destination are a collision the disk
+    // cannot show yet: both plan as `new`, both are written, and the second
+    // silently replaces the first — exit 0, one pack's decisions gone.
+    if let Some((first, second)) = add::same_destination(&vendored) {
+        eprintln!(
+            "aval: {} and {} would both be vendored as `{}` — add one of them \
+             with `--as <name>`",
+            first.source.label, second.source.label, second.name
+        );
+        return E_FAIL;
+    }
+
     // Plan everything, then print, then write. A collision must stop the whole
     // command rather than the one source that hit it.
     let mut plans = Vec::new();

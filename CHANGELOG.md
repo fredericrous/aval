@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+## v1.3.1
+
+Five defects, found by a review that reproduced each against a temporary
+repository. None changes a verdict for a corpus that loads; two of them changed
+verdicts for corpora that should not have loaded at all.
+
+### Fixed
+
+- **An unreadable records directory is an error, not an absence.** With
+  `sources` or `packs` declared, the loader tolerated a missing `dir`; it
+  tolerated every other read error too. A directory whose permissions were
+  removed dropped every numbered record from the graph, whatever they
+  superseded came back as heads, and `resolve` answered `active` with a
+  replaced decision — exit 0. Only "not found" is the allowance now; anything
+  else is exit 3 naming the directory.
+- **Two sources landing on one pack name are refused before anything is
+  written.** `aval add /a/fleet /b/fleet` planned both as `new`, wrote the
+  same path twice, and the second silently replaced the first. The command now
+  stops with both sources named and asks for `--as`.
+- **An inline `packs:` list is edited as a list.** `packs: []`, the shape a
+  fresh consumer starts with, was read as a block-list heading and an
+  indented item was appended under it: `add` exited 0 and every later read
+  exited 3 with "unexpected indentation". An inline list stays inline and
+  gains its item; a block list stays a block; a scalar is refused.
+- **A revision may contain slashes.** `repo@feature/test` was read as a path
+  called `repo@feature/test` at HEAD, because the `@` was looked for only past
+  the last `/`. The last `@` now separates when what precedes it is a
+  complete source and what follows it can be a ref; userinfo in an ssh or
+  https URL still is not a revision, and a spec that exists on disk as written
+  is a path.
+- **A full commit id resolves to itself.** `ls-remote` takes its last argument
+  as a ref pattern, so pinning the very commit id the ambiguity error told
+  you to use matched nothing. Forty (or sixty-four) hex digits now name
+  themselves; whether the remote hands that commit over is `fetch`'s question.
+
 ## v1.3.0
 
 A vendored pack is now `.adr/packs/<name>.pack`, and whether it is still the
