@@ -108,13 +108,14 @@ fn err<T>(line: usize, message: impl Into<String>) -> Result<T, YamlError> {
 }
 
 /// One significant line: blank lines and whole-line comments are dropped.
+///
+/// `no` is 1-based and indexes back into the raw source, which is how a block
+/// scalar reads the lines this dropped.
 #[derive(Debug, Clone)]
 struct Line {
     indent: usize,
     text: String,
     no: usize,
-    /// Raw body kept for block scalars, which must preserve relative indent.
-    raw: String,
 }
 
 fn lex(src: &str) -> Result<Vec<Line>, YamlError> {
@@ -132,7 +133,6 @@ fn lex(src: &str) -> Result<Vec<Line>, YamlError> {
             indent: raw.len() - trimmed.len(),
             text: trimmed.to_string(),
             no,
-            raw: raw.to_string(),
         });
     }
     Ok(out)
@@ -242,9 +242,19 @@ fn flow_seq(raw: &str, line: usize) -> Result<Node, YamlError> {
 }
 
 /// `|`, `>`, with optional `-` or `+` chomping.
+///
+/// Read from the RAW source rather than from the lexed lines, because `lex`
+/// drops blank lines and whole-line comments and inside a block scalar both are
+/// CONTENT. A rule body (§2.4) is markdown carried in a pack: its paragraph
+/// breaks are blank lines and its sub-headings begin with `#`, and the earlier
+/// shape silently deleted both — a body that went through a pack came back with
+/// its paragraphs run together and its headings gone, with nothing reporting
+/// it. The lexed lines are still what the parser walks; this only reads past
+/// them and then skips `i` forward to the first line it did not consume.
 fn block_scalar(
     header: &str,
     lines: &[Line],
+    raw: &[&str],
     i: &mut usize,
     parent_indent: usize,
     line: usize,
@@ -259,40 +269,113 @@ fn block_scalar(
     }
     let mut body: Vec<String> = Vec::new();
     let mut block_indent: Option<usize> = None;
-    while *i < lines.len() && lines[*i].indent > parent_indent {
-        let l = &lines[*i];
-        let ind = *block_indent.get_or_insert(l.indent);
-        if l.indent < ind {
+    // `line` is 1-based and names the header's own line, so this starts at the
+    // one after it.
+    let mut at = line;
+    while at < raw.len() {
+        let text = raw[at];
+        let trimmed = text.trim_start_matches(' ');
+        let indent = text.len() - trimmed.len();
+        if trimmed.is_empty() {
+            // A blank line is part of the block when the block continues past
+            // it. Trailing ones are decided by chomping, below.
+            body.push(String::new());
+            at += 1;
+            continue;
+        }
+        if indent <= parent_indent {
             break;
         }
-        let content = l.raw.get(ind..).unwrap_or("").to_string();
-        body.push(content);
+        let ind = *block_indent.get_or_insert(indent);
+        if indent < ind {
+            break;
+        }
+        body.push(text.get(ind..).unwrap_or("").to_string());
+        at += 1;
+    }
+    while *i < lines.len() && lines[*i].no <= at {
         *i += 1;
     }
-    let mut text = if fold {
-        body.join(" ")
-    } else {
-        body.join("\n")
-    };
+
+    // Trailing blank lines are chomping's business, not the body's.
+    let mut end = body.len();
+    while end > 0 && body[end - 1].is_empty() {
+        end -= 1;
+    }
+    let trailing = body.len() - end;
+    body.truncate(end);
+
+    let mut text = if fold { folded(&body) } else { body.join("\n") };
     match chomp {
         '-' => {}
-        _ => text.push('\n'),
+        '+' => {
+            text.push('\n');
+            for _ in 0..trailing {
+                text.push('\n');
+            }
+        }
+        // Clip: one trailing newline, and none at all for an empty block, which
+        // is what YAML says and what makes `body: |` round-trip.
+        _ => {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+        }
     }
     Ok(Node::new(Value::Str(text), line))
 }
 
-fn parse_block(lines: &[Line], i: &mut usize, indent: usize) -> Result<Node, YamlError> {
+/// Folding, `>`: lines join with a space, and a blank line is a real newline.
+///
+/// Plain `join(" ")` was right only while `lex` was deleting the blank lines —
+/// with them present it would emit a double space where the author wrote a
+/// paragraph break.
+fn folded(body: &[String]) -> String {
+    let mut out = String::new();
+    let mut breaks = 0usize;
+    for l in body {
+        if l.is_empty() {
+            breaks += 1;
+            continue;
+        }
+        if out.is_empty() {
+            out.push_str(l);
+        } else if breaks > 0 {
+            for _ in 0..breaks {
+                out.push('\n');
+            }
+            out.push_str(l);
+        } else {
+            out.push(' ');
+            out.push_str(l);
+        }
+        breaks = 0;
+    }
+    out
+}
+
+fn parse_block(
+    lines: &[Line],
+    raw: &[&str],
+    i: &mut usize,
+    indent: usize,
+) -> Result<Node, YamlError> {
     if *i >= lines.len() {
         return err(lines.last().map_or(1, |l| l.no), "unexpected end of input");
     }
     if lines[*i].text.starts_with("- ") || lines[*i].text == "-" {
-        parse_seq(lines, i, indent)
+        parse_seq(lines, raw, i, indent)
     } else {
-        parse_map(lines, i, indent)
+        parse_map(lines, raw, i, indent)
     }
 }
 
-fn parse_seq(lines: &[Line], i: &mut usize, indent: usize) -> Result<Node, YamlError> {
+fn parse_seq(
+    lines: &[Line],
+    raw: &[&str],
+    i: &mut usize,
+    indent: usize,
+) -> Result<Node, YamlError> {
     let start = lines[*i].no;
     let mut items = Vec::new();
     while *i < lines.len() && lines[*i].indent == indent {
@@ -306,11 +389,11 @@ fn parse_seq(lines: &[Line], i: &mut usize, indent: usize) -> Result<Node, YamlE
         let item_indent = indent + (l.text.len() - rest.len());
         *i += 1;
         if rest.is_empty() {
-            items.push(parse_block(lines, i, item_indent)?);
+            items.push(parse_block(lines, raw, i, item_indent)?);
         } else if is_map_entry(rest) {
             let mut entries = Vec::new();
-            parse_map_entry(rest, lines, i, item_indent, l.no, &mut entries)?;
-            parse_map_rest(lines, i, item_indent, &mut entries)?;
+            parse_map_entry(rest, lines, raw, i, item_indent, l.no, &mut entries)?;
+            parse_map_rest(lines, raw, i, item_indent, &mut entries)?;
             items.push(Node::new(Value::Map(entries), l.no));
         } else {
             items.push(scalar(rest, l.no)?);
@@ -345,15 +428,21 @@ fn split_key(s: &str) -> Option<(&str, &str)> {
     None
 }
 
-fn parse_map(lines: &[Line], i: &mut usize, indent: usize) -> Result<Node, YamlError> {
+fn parse_map(
+    lines: &[Line],
+    raw: &[&str],
+    i: &mut usize,
+    indent: usize,
+) -> Result<Node, YamlError> {
     let start = lines[*i].no;
     let mut entries = Vec::new();
-    parse_map_rest(lines, i, indent, &mut entries)?;
+    parse_map_rest(lines, raw, i, indent, &mut entries)?;
     Ok(Node::new(Value::Map(entries), start))
 }
 
 fn parse_map_rest(
     lines: &[Line],
+    raw: &[&str],
     i: &mut usize,
     indent: usize,
     entries: &mut Vec<(String, Node)>,
@@ -367,14 +456,16 @@ fn parse_map_rest(
             return err(l.no, format!("expected `key: value`, found `{}`", l.text));
         }
         *i += 1;
-        parse_map_entry(&l.text, lines, i, indent, l.no, entries)?;
+        parse_map_entry(&l.text, lines, raw, i, indent, l.no, entries)?;
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parse_map_entry(
     text: &str,
     lines: &[Line],
+    raw: &[&str],
     i: &mut usize,
     indent: usize,
     line: usize,
@@ -389,7 +480,7 @@ fn parse_map_entry(
     let value = if rest.is_empty() {
         // A child block is indented further; otherwise the value is empty.
         if *i < lines.len() && lines[*i].indent > indent {
-            parse_block(lines, i, lines[*i].indent)?
+            parse_block(lines, raw, i, lines[*i].indent)?
         } else {
             Node::new(Value::Null, line)
         }
@@ -399,7 +490,7 @@ fn parse_map_entry(
         }
         flow_seq(strip_comment(rest), line)?
     } else if rest.starts_with('|') || rest.starts_with('>') {
-        block_scalar(strip_comment(rest).trim(), lines, i, indent, line)?
+        block_scalar(strip_comment(rest).trim(), lines, raw, i, indent, line)?
     } else {
         scalar(rest, line)?
     };
@@ -413,9 +504,10 @@ pub fn parse(src: &str) -> Result<Node, YamlError> {
     if lines.is_empty() {
         return Ok(Node::new(Value::Map(Vec::new()), 1));
     }
+    let raw: Vec<&str> = src.lines().collect();
     let base = lines[0].indent;
     let mut i = 0;
-    let node = parse_block(&lines, &mut i, base)?;
+    let node = parse_block(&lines, &raw, &mut i, base)?;
     if i < lines.len() {
         return err(
             lines[i].no,
@@ -509,6 +601,64 @@ mod tests {
     fn literal_block_scalar_keeps_newlines() {
         let n = p("note: |-\n  one\n  two\n");
         assert_eq!(n.get("note").unwrap().as_str(), Some("one\ntwo"));
+    }
+
+    /// What a pack's `body: |` has to survive: a blank line between paragraphs
+    /// and a markdown sub-heading. `lex` drops both — a blank line and a line
+    /// opening with `#` — so before this the text came back with its paragraphs
+    /// run together and its headings deleted, silently.
+    #[test]
+    fn a_literal_block_keeps_blank_lines_and_hash_lines() {
+        let n = p("body: |\n  one\n\n  ### two\n  three\nnext: x\n");
+        assert_eq!(
+            n.get("body").unwrap().as_str(),
+            Some("one\n\n### two\nthree\n")
+        );
+        assert_eq!(n.get("next").unwrap().as_str(), Some("x"));
+    }
+
+    /// The round trip the pack relies on: a body rendered indented under `|`
+    /// reads back as itself once the clip newline is trimmed, including a body
+    /// whose source ended without a trailing newline.
+    #[test]
+    fn a_body_round_trips_through_a_literal_block() {
+        for body in [
+            "one\n\ntwo",
+            "a\n\n\nb",
+            "- list\n- items\n\n```\ncode block\n```",
+            "single line",
+            "trailing spaces kept mid-body\n\nlast",
+        ] {
+            let mut src = String::from("body: |\n");
+            for l in body.lines() {
+                if l.is_empty() {
+                    src.push('\n');
+                } else {
+                    src.push_str(&format!("  {}\n", l));
+                }
+            }
+            src.push_str("after: y\n");
+            let n = p(&src);
+            let got = n.get("body").unwrap().as_str().unwrap();
+            assert_eq!(got.trim_end_matches('\n'), body, "{:?}", src);
+            assert_eq!(n.get("after").unwrap().as_str(), Some("y"));
+        }
+    }
+
+    #[test]
+    fn blank_lines_inside_a_folded_block_are_paragraph_breaks() {
+        let n = p("reason: >-\n  one\n  two\n\n  three\n");
+        assert_eq!(n.get("reason").unwrap().as_str(), Some("one two\nthree"));
+    }
+
+    #[test]
+    fn chomping_decides_the_trailing_newlines() {
+        assert_eq!(p("a: |-\n  x\n\n\n").get("a").unwrap().as_str(), Some("x"));
+        assert_eq!(p("a: |\n  x\n\n\n").get("a").unwrap().as_str(), Some("x\n"));
+        assert_eq!(
+            p("a: |+\n  x\n\n\n").get("a").unwrap().as_str(),
+            Some("x\n\n\n")
+        );
     }
 
     #[test]
