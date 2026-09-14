@@ -892,3 +892,41 @@ fn a_relative_dash_c_reports_committed_provenance() {
         .unwrap_or_default();
     assert!(inner.starts_with(absolute.out.trim()), "mcp: {}", reply);
 }
+
+/// A reader that stops early must not be answered with a panic. The output
+/// has to outgrow the pipe buffer, or the write lands before the reader
+/// leaves and nothing is observed; three thousand keys do it.
+#[cfg(unix)]
+#[test]
+fn a_closed_stdout_ends_the_process_quietly() {
+    use std::io::Read;
+    use std::process::Stdio;
+    let r = scratch("closed-stdout");
+    let mut registry = String::from("dir: docs/adr\nscopes: [cloud]\nkeys:\n");
+    for i in 0..3000 {
+        registry.push_str(&format!("  k.n{}:\n    description: key number {}\n", i, i));
+    }
+    write(&r, ".adr.yaml", &registry);
+    let mut child = Command::new(bin())
+        .args(["keys"])
+        .current_dir(&r)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn aval");
+    // Take the reader and drop it without reading: the pipe closes with the
+    // writer still holding most of its output.
+    drop(child.stdout.take());
+    let mut err = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut err)
+        .expect("read stderr");
+    let status = child.wait().expect("wait");
+    assert!(!err.contains("panicked"), "{}", err);
+    assert!(!err.contains("Broken pipe"), "{}", err);
+    // Ended by the signal, not by a successful exit it did not have.
+    assert!(!status.success(), "{:?}", status);
+}
