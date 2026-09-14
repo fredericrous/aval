@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## v1.3.2
+
+### Fixed
+
+- **A closed stdout ends the process quietly.** Rust starts with SIGPIPE
+  ignored, so `aval add … | head -1` answered the reader leaving with a panic
+  and forty lines of backtrace. Every print in the binary now goes through one
+  writer: a closed pipe ends the process with status 141, the code the shell
+  would have shown had the kernel done it, and any other write failure is a
+  tool failure that says so. (Restoring the signal's default disposition is
+  the usual cure; it needs an `unsafe` call this workspace forbids.)
+
 ## v1.3.1
 
 Five defects, found by a review that reproduced each against a temporary

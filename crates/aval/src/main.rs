@@ -16,6 +16,38 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+/// Write to stdout, and end quietly when nobody is reading.
+///
+/// Rust starts a program with SIGPIPE ignored, so a write to a pipe whose
+/// reader has gone returns EPIPE — and `println!` unwraps it into a panic
+/// with a backtrace, which is what `aval add … | head -1` printed after the
+/// one line that was asked for. Restoring the signal's default disposition is
+/// the usual cure and needs an `unsafe` call this workspace forbids, so the
+/// cure is at the write instead: every print in this binary goes through
+/// here, and a closed pipe ends the process with the status the shell would
+/// have reported had the kernel done it (128 + SIGPIPE). Any other write
+/// failure is a tool failure and says so.
+fn emit(text: &str) {
+    let mut out = std::io::stdout().lock();
+    if let Err(e) = out.write_all(text.as_bytes()) {
+        if e.kind() == std::io::ErrorKind::BrokenPipe {
+            std::process::exit(141);
+        }
+        eprintln!("aval: cannot write to stdout: {}", e);
+        std::process::exit(E_FAIL);
+    }
+}
+
+// Shadow the standard macros for the rest of this file, so that no print can
+// bypass `emit`. Textual scope: this must stay above every use.
+macro_rules! print {
+    ($($arg:tt)*) => { emit(&format!($($arg)*)) };
+}
+macro_rules! println {
+    () => { emit("\n") };
+    ($($arg:tt)*) => { emit(&format!("{}\n", format_args!($($arg)*))) };
+}
+
 const USAGE: &str = "\
 aval — the current architecture decision, as a typed answer
 
