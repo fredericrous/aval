@@ -227,8 +227,20 @@ pub fn load(from: &Path) -> Result<Loaded, LoadError> {
         }
         // With `sources` or `packs` declared, a corpus need not have a `dir` on
         // disk yet. `heads --write` still needs one, and says so when it gets
-        // there.
-        Err(_) => {}
+        // there. That allowance is for a directory that is NOT THERE, and
+        // nothing else: a directory that exists and cannot be read holds
+        // records this run did not see, and every one of them is a missing
+        // node — whatever it superseded returns as a head, and `resolve`
+        // answers `active` with a decision that was replaced, exit 0. Silence
+        // here once turned a permissions error into that answer.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(LoadError::Unreadable(format!(
+                "{}: {}",
+                adr_dir.display(),
+                e
+            )))
+        }
     }
 
     // 2. Records named outright. A listed file that is missing is an error:

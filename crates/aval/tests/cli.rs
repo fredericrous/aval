@@ -216,6 +216,40 @@ fn two_records_may_share_a_basename() {
 
 // --- freshness and the write path -----------------------------------------
 
+/// A directory that cannot be read is not a directory that is not there. The
+/// allowance for a missing `dir` beside `sources` once swallowed a permissions
+/// error whole: every numbered record vanished from the graph, whatever they
+/// superseded came back as heads, and `resolve` answered from a corpus missing
+/// half of itself — exit 0.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_records_directory_is_an_error_not_an_absence() {
+    use std::os::unix::fs::PermissionsExt;
+    let r = scratch("unreadable-dir");
+    write(
+        &r,
+        ".adr.yaml",
+        "dir: docs/adr\nsources: [docs/spec.md]\nscopes: [cloud]\nkeys:\n  a.b:\n  c.d:\n",
+    );
+    write(&r, "docs/adr/0001-one.md", NUMBERED);
+    write(&r, "docs/spec.md", LISTED);
+    let before = run(&r, &["resolve", "a.b"]);
+    assert_eq!(before.code, 0, "{}", before.err);
+
+    let dir = r.join("docs/adr");
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o000)).unwrap();
+    // Root reads anything; the property under test is unobservable there.
+    let unreadable = fs::read_dir(&dir).is_err();
+    let got = run(&r, &["resolve", "a.b"]);
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+    if !unreadable {
+        return;
+    }
+    assert_eq!(got.code, 3, "out={} err={}", got.out, got.err);
+    assert!(got.err.contains("docs/adr"), "{}", got.err);
+    assert!(!got.out.contains("undecided"), "{}", got.out);
+}
+
 fn corpus_with_heads(name: &str) -> PathBuf {
     let r = scratch(name);
     write(&r, ".adr.yaml", REGISTRY);

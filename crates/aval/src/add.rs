@@ -137,6 +137,19 @@ pub fn resolve_one(spec: &str, as_name: Option<&str>) -> Result<Vendored, String
     })
 }
 
+/// Two of these that would land on one path, if any: the earlier and the later.
+///
+/// Checked before planning, because `plan` asks the disk and the disk does not
+/// yet hold what an earlier source in the same command is about to write.
+pub fn same_destination(vs: &[Vendored]) -> Option<(&Vendored, &Vendored)> {
+    vs.iter().enumerate().find_map(|(i, later)| {
+        vs[..i]
+            .iter()
+            .find(|earlier| earlier.rel == later.rel)
+            .map(|earlier| (earlier, later))
+    })
+}
+
 /// What writing this one would do, without doing it.
 #[derive(Debug)]
 pub enum Plan {
@@ -265,6 +278,86 @@ pub fn write(root: &Path, v: &Vendored, p: &Plan) -> Result<Listed, String> {
     relist(root, from, &v.rel)
 }
 
+/// The `packs:` entry of a registry, as the text a person wrote it.
+///
+/// Two shapes are legal YAML and both occur: a block list, one `- path` per
+/// line, and an inline list, `packs: [a, b]` or the `packs: []` a registry
+/// starts with. An edit that assumed the block shape once appended an
+/// indented item under `packs: []`, which `add` accepted and every later read
+/// refused with "unexpected indentation" — exit 3, from a command that had
+/// exited 0.
+enum PacksShape {
+    /// No `packs:` at all.
+    Absent,
+    /// `packs:` heading a block list.
+    Block,
+    /// `packs: [ ... ]` on one line: the index, the items, and everything after
+    /// the closing bracket (a trailing comment, usually).
+    Inline {
+        line: usize,
+        items: Vec<String>,
+        suffix: String,
+    },
+}
+
+/// Where the value of a `key:` line ends and its comment begins.
+fn before_comment(rest: &str) -> &str {
+    let mut prev = ' ';
+    for (i, c) in rest.char_indices() {
+        if c == '#' && prev.is_whitespace() {
+            return &rest[..i];
+        }
+        prev = c;
+    }
+    rest
+}
+
+fn packs_shape(src: &str) -> Result<PacksShape, String> {
+    for (i, line) in src.lines().enumerate() {
+        let Some(rest) = line.strip_prefix("packs:") else {
+            continue;
+        };
+        let value = before_comment(rest).trim();
+        if value.is_empty() {
+            return Ok(PacksShape::Block);
+        }
+        let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) else {
+            return Err(format!(
+                "{}: `packs:` holds `{}`, which is not a list",
+                load::REGISTRY,
+                value
+            ));
+        };
+        let items = inner
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim_matches(|c| c == '"' || c == '\'').to_string())
+            .collect();
+        let close = rest.rfind(']').map_or(rest.len(), |j| j + 1);
+        return Ok(PacksShape::Inline {
+            line: i,
+            items,
+            suffix: rest[close..].to_string(),
+        });
+    }
+    Ok(PacksShape::Absent)
+}
+
+/// One line of the registry, changed; every other byte as it was.
+fn replace_line(src: &str, index: usize, with: &str) -> String {
+    let mut out = String::new();
+    for (i, line) in src.lines().enumerate() {
+        out.push_str(if i == index { with } else { line });
+        out.push('\n');
+    }
+    out
+}
+
+fn inline_line(items: &[String], suffix: &str) -> String {
+    format!("packs: [{}]{}", items.join(", "), suffix)
+}
+
 /// Point the registry's `packs:` line at the migrated path.
 ///
 /// Textual, like `register`, and for the same reason. Only the one line moves;
@@ -273,6 +366,27 @@ fn relist(root: &Path, from: &str, to: &str) -> Result<Listed, String> {
     let path = root.join(load::REGISTRY);
     let src = std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", load::REGISTRY, e))?;
     let item = |l: &str, rel: &str| l.trim_start().starts_with('-') && l.contains(rel);
+
+    if let PacksShape::Inline {
+        line,
+        mut items,
+        suffix,
+    } = packs_shape(&src)?
+    {
+        if !items.iter().any(|i| i == from) {
+            return register(root, to);
+        }
+        // Drop rather than rename when the destination is already listed:
+        // a pack listed twice is a name collision at load.
+        items.retain(|i| i != from);
+        if !items.iter().any(|i| i == to) {
+            items.push(to.to_string());
+        }
+        let out = replace_line(&src, line, &inline_line(&items, &suffix));
+        std::fs::write(&path, out).map_err(|e| format!("{}: {}", load::REGISTRY, e))?;
+        return Ok(Listed::Relisted);
+    }
+
     if !src.lines().any(|l| item(l, from)) {
         // Nothing named the old path — a registry somebody edited by hand.
         // Registering the new one is still the right end state.
@@ -301,10 +415,28 @@ fn relist(root: &Path, from: &str, to: &str) -> Result<Listed, String> {
 ///
 /// A textual edit rather than a re-serialisation, because `.adr.yaml` is a file
 /// a person wrote and rewriting it would lose their comments and their
-/// ordering to make room for one line.
+/// ordering to make room for one line. An inline list stays inline and a block
+/// list stays a block: the shape is theirs too.
 fn register(root: &Path, rel: &str) -> Result<Listed, String> {
     let path = root.join(load::REGISTRY);
     let src = std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", load::REGISTRY, e))?;
+
+    let shape = packs_shape(&src)?;
+    if let PacksShape::Inline {
+        line,
+        mut items,
+        suffix,
+    } = shape
+    {
+        if items.iter().any(|i| i == rel) {
+            return Ok(Listed::Already);
+        }
+        items.push(rel.to_string());
+        let out = replace_line(&src, line, &inline_line(&items, &suffix));
+        std::fs::write(&path, out).map_err(|e| format!("{}: {}", load::REGISTRY, e))?;
+        return Ok(Listed::Added);
+    }
+
     if src
         .lines()
         .any(|l| l.trim_start().starts_with('-') && l.contains(rel))
@@ -325,7 +457,7 @@ fn register(root: &Path, rel: &str) -> Result<Listed, String> {
         }
         out.push_str(line);
         out.push('\n');
-        if line.trim_start() == "packs:" || line.trim_start().starts_with("packs:") {
+        if line.starts_with("packs:") {
             in_packs = true;
         }
     }
@@ -617,6 +749,86 @@ keys:
             panic!("a decision nobody published is not unchanged");
         };
         assert_eq!(had, v.id, "the commit is the same; the file is not");
+    }
+
+    /// The registry a fresh consumer starts with, and the shape `register`
+    /// once corrupted by appending a block item under it.
+    fn root_with(tag: &str, registry: &str) -> PathBuf {
+        let r = root(tag);
+        std::fs::write(r.join(load::REGISTRY), registry).expect("registry");
+        r
+    }
+
+    fn registry_text(r: &Path) -> String {
+        std::fs::read_to_string(r.join(load::REGISTRY)).unwrap()
+    }
+
+    #[test]
+    fn an_inline_packs_list_stays_inline_and_stays_valid() {
+        let r = root_with("inline-empty", "dir: docs/adr\npacks: []\nkeys:\n");
+        let v = vendored("github:acme/decisions");
+        assert_eq!(write(&r, &v, &Plan::New).expect("written"), Listed::Added);
+        let text = registry_text(&r);
+        assert_eq!(
+            text,
+            "dir: docs/adr\npacks: [.adr/packs/fleet.pack]\nkeys:\n"
+        );
+        // What was written must read back: this is the exact shape that used
+        // to come back as "unexpected indentation" on the next command.
+        aval_core::parse::registry(load::REGISTRY, &text).expect("a registry that reads back");
+        assert_eq!(register(&r, &v.rel).expect("again"), Listed::Already);
+    }
+
+    #[test]
+    fn an_inline_list_with_items_and_a_comment_keeps_both() {
+        let r = root_with(
+            "inline-items",
+            "dir: docs/adr\npacks: [.adr/packs/other.pack]  # theirs\nkeys:\n",
+        );
+        let v = vendored("github:acme/decisions");
+        register(&r, &v.rel).expect("registered");
+        assert_eq!(
+            registry_text(&r),
+            "dir: docs/adr\npacks: [.adr/packs/other.pack, .adr/packs/fleet.pack]  # theirs\nkeys:\n"
+        );
+    }
+
+    #[test]
+    fn a_migration_moves_an_inline_entry_too() {
+        let r = root_with(
+            "inline-migrate",
+            "dir: docs/adr\npacks: [.adr/packs/fleet.yaml, .adr/packs/other.pack]\nkeys:\n",
+        );
+        let v = vendored("github:acme/decisions");
+        old_yaml(&r, &v, &v.id);
+        let p = plan(&r, &v).expect("planned");
+        assert!(matches!(p, Plan::Migrate { .. }));
+        assert_eq!(write(&r, &v, &p).expect("written"), Listed::Relisted);
+        assert_eq!(
+            registry_text(&r),
+            "dir: docs/adr\npacks: [.adr/packs/other.pack, .adr/packs/fleet.pack]\nkeys:\n"
+        );
+        assert!(!r.join(format!("{}/fleet.yaml", DIR)).exists());
+    }
+
+    #[test]
+    fn a_packs_scalar_is_refused_not_edited() {
+        let r = root_with("scalar", "dir: docs/adr\npacks: nope\nkeys:\n");
+        let v = vendored("github:acme/decisions");
+        let err = register(&r, &v.rel).expect_err("refused");
+        assert!(err.contains("not a list"), "{}", err);
+        assert_eq!(registry_text(&r), "dir: docs/adr\npacks: nope\nkeys:\n");
+    }
+
+    #[test]
+    fn two_sources_landing_on_one_path_are_caught_before_planning() {
+        let a = vendored("github:acme/fleet");
+        let b = vendored("github:other/fleet");
+        assert!(same_destination(&[a]).is_none());
+        let both = [vendored("github:acme/fleet"), b];
+        let (first, second) = same_destination(&both).expect("a collision");
+        assert_eq!(first.source.label, "github:acme/fleet");
+        assert_eq!(second.source.label, "github:other/fleet");
     }
 
     #[test]

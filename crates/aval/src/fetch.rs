@@ -73,12 +73,55 @@ fn looks_like_path(s: &str) -> bool {
     Path::new(s).exists()
 }
 
-/// Split a trailing `@rev`, but only past the last path separator.
+/// Whether `body` is a source on its own, so that what follows an `@` after
+/// it can only be a revision.
+///
+/// The shorthands announce themselves; a URL has a host and then a path; the
+/// scp form has a user, a host and a colon; a path looks like one. `git`, the
+/// part of `git@github.com:acme/repo.git` before its `@`, is none of these.
+fn is_complete_source(body: &str) -> bool {
+    if body.starts_with("github:") || body.starts_with("forgejo:") {
+        return true;
+    }
+    if let Some((_, after)) = body.split_once("://") {
+        return after.contains('/');
+    }
+    if let Some((_, after)) = body.split_once('@') {
+        return after.contains(':');
+    }
+    looks_like_path(body)
+}
+
+/// Whether a string can be a git ref name at all. A backslash cannot, and
+/// neither can whitespace or `~ ^ : ? * [` — so `b\\pack` after the `@` in a
+/// Windows path is not a revision, whatever the rest of the spec says.
+fn plausible_ref(rev: &str) -> bool {
+    !rev.is_empty()
+        && !rev
+            .chars()
+            .any(|c| c.is_whitespace() || "\\~^:?*[".contains(c))
+}
+
+/// Split a trailing `@rev`.
 ///
 /// `git@github.com:acme/repo.git` carries an `@` in its userinfo. Splitting on
 /// the last `@` outright would read `github.com` as a revision and quietly
-/// fetch something else entirely.
+/// fetch something else entirely — so the last `@` is a separator only when
+/// what precedes it is a complete source and what follows it could be a ref.
+/// `repo@feature/test` passes that test where the earlier rule, which looked
+/// for `@` only past the last `/`, saw a path called `repo@feature/test` and
+/// fetched HEAD. The earlier rule remains as the fallback, and a spec that
+/// exists on disk exactly as written is a path, whatever it contains.
 fn split_rev(spec: &str) -> Result<(&str, Option<&str>), String> {
+    if looks_like_path(spec) && Path::new(spec).exists() {
+        return Ok((spec, None));
+    }
+    if let Some(at) = spec.rfind('@') {
+        let (body, rev) = (&spec[..at], &spec[at + 1..]);
+        if plausible_ref(rev) && is_complete_source(body) {
+            return Ok((body, Some(rev)));
+        }
+    }
     let sep = spec.rfind(['/', '\\']).map_or(0, |i| i + 1);
     match spec[sep..].rfind('@') {
         None => Ok((spec, None)),
@@ -140,8 +183,24 @@ fn named_refs(out: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// A full commit id: forty hex digits, or sixty-four on a sha256 repository.
+/// A short id is not one — it is a prefix, and only the remote could say
+/// whether it is unambiguous.
+pub fn is_commit_id(rev: &str) -> bool {
+    (rev.len() == 40 || rev.len() == 64) && rev.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 /// Turn a revision into the commit id it names right now.
+///
+/// A commit id names itself. `ls-remote` takes its last argument as a REF
+/// pattern, so a pin that IS a commit — the very thing the ambiguity error
+/// below tells a caller to use — matched no ref and was reported as naming
+/// nothing. Whether the remote will hand that commit over is `fetch`'s
+/// question, and it asks it.
 pub fn resolve(s: &Source) -> Result<String, String> {
+    if is_commit_id(&s.rev) {
+        return Ok(s.rev.to_ascii_lowercase());
+    }
     let out = git(&["ls-remote", &s.url, &s.rev], None).map_err(|e| {
         format!(
             "{}: cannot reach the remote, or {} names nothing ({})",
@@ -279,6 +338,70 @@ mod tests {
         ] {
             assert!(parse_source(bad).is_err(), "{} should be refused", bad);
         }
+    }
+
+    /// A branch name with a slash in it is the ordinary case, not an edge:
+    /// `feature/x`, `release/2.1`, `user/name/topic`. The earlier splitter
+    /// looked for `@` only past the last `/` and read every one of these as a
+    /// path called `repo@feature/x`, revision HEAD.
+    #[test]
+    fn a_revision_may_contain_slashes() {
+        let (body, rev) = split_rev("/nowhere/such/repo@feature/test").unwrap();
+        assert_eq!(body, "/nowhere/such/repo");
+        assert_eq!(rev, Some("feature/test"));
+
+        let s = parse_source("git@github.com:acme/repo.git@feature/x").unwrap();
+        assert_eq!(s.url, "git@github.com:acme/repo.git");
+        assert_eq!(s.rev, "feature/x");
+
+        let s = parse_source("https://u@host/acme/repo.git@release/2.1").unwrap();
+        assert_eq!(s.url, "https://u@host/acme/repo.git");
+        assert_eq!(s.rev, "release/2.1");
+
+        let s = parse_source("github:acme/repo@user/name/topic").unwrap();
+        assert_eq!(s.rev, "user/name/topic");
+    }
+
+    /// The userinfo cases that the slash-tolerant rule must still not split.
+    #[test]
+    fn userinfo_is_still_not_a_revision() {
+        let (body, rev) = split_rev("https://u@host/acme/repo.git").unwrap();
+        assert_eq!(body, "https://u@host/acme/repo.git");
+        assert_eq!(rev, None);
+        let (body, rev) = split_rev("git@github.com:acme/repo.git").unwrap();
+        assert_eq!(body, "git@github.com:acme/repo.git");
+        assert_eq!(rev, None);
+    }
+
+    /// A directory that exists with an `@` in its name is a path, whatever
+    /// follows the `@`.
+    #[test]
+    fn a_path_that_exists_is_never_split() {
+        let d = std::env::temp_dir().join(format!("aval-fetch-{}-x@y", std::process::id()));
+        let inner = d.join("pack");
+        std::fs::create_dir_all(&inner).unwrap();
+        let spec = inner.to_string_lossy().to_string();
+        let (body, rev) = split_rev(&spec).unwrap();
+        assert_eq!(body, spec);
+        assert_eq!(rev, None);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A full commit id names itself; `ls-remote` would have matched it as a
+    /// ref pattern and found nothing, which is what the ambiguity error told
+    /// a caller to do next.
+    #[test]
+    fn a_commit_id_pin_resolves_to_itself_without_the_network() {
+        let id = "0123456789ABCDEF0123456789abcdef01234567";
+        assert!(is_commit_id(id));
+        assert!(!is_commit_id("0123456"), "a prefix is not an id");
+        assert!(!is_commit_id("v1.2.0"));
+        let s = Source {
+            label: "nowhere".into(),
+            url: "/nowhere/at/all".into(),
+            rev: id.into(),
+        };
+        assert_eq!(resolve(&s).unwrap(), id.to_ascii_lowercase());
     }
 
     #[test]
