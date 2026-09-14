@@ -520,6 +520,48 @@ pub fn parse(src: &str) -> Result<Node, YamlError> {
     Ok(node)
 }
 
+/// Whether two documents **declare** the same thing.
+///
+/// `Node` derives `PartialEq`, which includes `line`, so two files saying the
+/// same thing with a blank line between different keys are unequal — and that
+/// is the right default for a parser whose whole job is pointing at lines. It
+/// is the wrong question for a vendored pack. A pack lives in repositories
+/// whose pre-commit hook runs a formatter over every file, and a formatter that
+/// requoted a scalar or moved a blank line has changed nothing this tool reads:
+/// the file still declares the decisions the producer published. Comparing
+/// bytes made that file "edited" by nobody, and re-vendoring it rewrote it
+/// again on the next run.
+///
+/// So: values, and nothing else. Line numbers, comments, quoting style and
+/// blank lines are all gone by the time a document is a `Node`.
+///
+/// Sequences compare **in order** — `replaces` is a list whose order the writer
+/// fixes, and a reordering is a different document until something says
+/// otherwise. Mappings compare **without** order, by key set and value, because
+/// the dialect forbids a duplicate key (so a key set is a set) and the pack
+/// writer sorts keys that a hand-written file need not.
+pub fn same_values(a: &Node, b: &Node) -> bool {
+    match (&a.value, &b.value) {
+        (Value::Str(x), Value::Str(y)) => x == y,
+        (Value::Bool(x), Value::Bool(y)) => x == y,
+        (Value::Null, Value::Null) => true,
+        (Value::Seq(x), Value::Seq(y)) => {
+            x.len() == y.len() && x.iter().zip(y.iter()).all(|(i, j)| same_values(i, j))
+        }
+        // Equal lengths plus every key of `x` matched in `y` is equal key sets,
+        // given the parser has already refused a duplicate key in either.
+        (Value::Map(x), Value::Map(y)) => {
+            x.len() == y.len()
+                && x.iter().all(|(k, v)| {
+                    y.iter()
+                        .find(|(k2, _)| k2 == k)
+                        .is_some_and(|(_, v2)| same_values(v, v2))
+                })
+        }
+        _ => false,
+    }
+}
+
 /// Split `---\n<frontmatter>\n---\n<body>`.
 ///
 /// Returns the frontmatter text and the line the frontmatter starts on, so a
@@ -720,5 +762,49 @@ mod tests {
     #[test]
     fn a_file_without_frontmatter_is_none() {
         assert!(split_frontmatter("# Title\n").is_none());
+    }
+
+    /// The case this exists for: a formatter went over a vendored pack. It
+    /// requoted every scalar, dropped a blank line, added a comment and
+    /// reordered two keys, and changed nothing the tool reads.
+    #[test]
+    fn a_reformatted_document_declares_the_same_thing() {
+        let a = p("aval: \"1.3.0\"\nscopes:\n  - \"browser\"\n\nkeys:\n  x.y:\n    description: \"it's here\"\n");
+        let b = p(
+            "# formatted\nkeys:\n  x.y:\n    description: 'it''s here'\naval: '1.3.0'\nscopes: [browser]\n",
+        );
+        assert_ne!(a, b, "the derived equality is byte-ish, which is the point");
+        assert!(same_values(&a, &b));
+    }
+
+    #[test]
+    fn a_changed_declaration_is_not_the_same_thing() {
+        let base = p("a: \"one\"\nb:\n  - \"x\"\n  - \"y\"\n");
+        // A changed scalar.
+        assert!(!same_values(
+            &base,
+            &p("a: \"two\"\nb:\n  - \"x\"\n  - \"y\"\n")
+        ));
+        // A missing key, in either direction.
+        let short = p("a: \"one\"\n");
+        assert!(!same_values(&base, &short));
+        assert!(!same_values(&short, &base));
+        // An added key.
+        assert!(!same_values(
+            &base,
+            &p("a: \"one\"\nb:\n  - \"x\"\n  - \"y\"\nc: \"new\"\n")
+        ));
+        // A reordered sequence: `replaces` is a list whose order is the
+        // writer's, so this is a different document.
+        assert!(!same_values(
+            &base,
+            &p("a: \"one\"\nb:\n  - \"y\"\n  - \"x\"\n")
+        ));
+        // A value that changed shape. `true` and `"true"` are two
+        // declarations, which is why the pack writer quotes unconditionally.
+        assert!(!same_values(&p("a: true\n"), &p("a: \"true\"\n")));
+        // Empty is not an empty list.
+        assert!(!same_values(&p("a:\n"), &p("a: []\n")));
+        assert!(same_values(&p("a:\n"), &p("a: # gone\n")));
     }
 }
