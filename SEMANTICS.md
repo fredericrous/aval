@@ -1119,7 +1119,7 @@ Low codes follow the duro CLI. Verdicts start at 4.
 | `aval pack --write` | A | `0` · `1` write failed · `2` · `3` |
 | `aval pack --check` | A + C | `0` fresh or not publishing · `1` stale · `2` · `3` |
 | `aval add` | A | `0` · `1` unreachable, ambiguous, or refused · `2` · `3` |
-| `aval add --check` | A | `0` current or unknown · `1` behind or edited · `2` · `3` |
+| `aval add --check [--quiet] [--budget S]` | A | `0` current or unknown · `1` behind or edited · `2` · `3` |
 | `aval keys` | A | `0` · `2` · `3` |
 | `aval rules` | A | `0` · `2` · `3` |
 | `aval rule` | A | `0` found · `2` · `3` · `7` unknown |
@@ -1131,6 +1131,16 @@ Low codes follow the duro CLI. Verdicts start at 4.
 hook that runs `heads`; whether the corpus resolves is that command's business,
 and the generated script stays **silent** when it does not, because a session
 must not fail over a tool the person who started it has not installed.
+
+The generated hook also runs `add --check --quiet --budget 5`, at most once an
+hour per repository, and prints what that reports only when it exits `1`. Its
+`0` — current, or could not ask — prints nothing, which is the rule above
+applied where it matters most: a hook that announced "could not ask" on every
+flaky network would be ignored on the day a pack was behind. `--budget` makes
+"could not ask" the answer for a remote that has not replied in S seconds; the
+call is killed, the standing is `unknown`, and the exit code follows. Under a
+budget no git call may prompt: `GIT_TERMINAL_PROMPT=0` always, and
+`GIT_SSH_COMMAND` set to a non-interactive ssh unless the caller set one.
 
 `aval mcp` never exits `3`. It reads no corpus at startup, because a registry
 being edited must not take the surface away, and a corpus that will not load is

@@ -518,6 +518,141 @@ fn add_check_notices_a_pack_that_has_moved() {
     assert!(got.out.contains("aval add"), "{}", got.out);
 }
 
+/// `--quiet` is the hook's voice: nothing when every pack is current or
+/// cannot be asked, and only the packs that need a person when one does.
+#[test]
+fn add_check_quiet_speaks_only_when_a_pack_needs_a_person() {
+    let fleet = producer("quiet-fleet");
+    let c = consumer_pack_only("quiet-consumer");
+    assert_eq!(run(&c, &["add", "--as", "fleet", &src(&fleet)]).code, 0);
+
+    let got = run(&c, &["add", "--check", "--quiet", "--budget", "10"]);
+    assert_eq!(got.code, 0, "{}", got.all());
+    assert_eq!(got.out.trim(), "", "current is silence: {}", got.out);
+
+    write(
+        &fleet,
+        "docs/adr/0009-more.md",
+        &record(
+            "ADR-0009",
+            "release.trigger",
+            Some("duro-stack"),
+            "a merge",
+            "first: true",
+        ),
+    );
+    assert_eq!(run(&fleet, &["heads", "--write"]).code, 0);
+    assert_eq!(run(&fleet, &["pack", "--write"]).code, 0);
+    git(&fleet, &["add", "-A"]);
+    git(&fleet, &["commit", "-qm", "another decision"]);
+
+    let got = run(&c, &["add", "--check", "--quiet"]);
+    assert_eq!(got.code, 1, "{}", got.all());
+    assert!(got.out.contains("behind"), "{}", got.out);
+    assert!(got.out.contains("aval add"), "{}", got.out);
+    assert!(!got.out.contains("current"), "{}", got.out);
+
+    // A source that cannot be asked is `unknown`: exit 0, and quiet says
+    // nothing about it.
+    let moved = c.join(".adr/packs/fleet.pack");
+    let text = fs::read_to_string(&moved).unwrap();
+    let gone = fleet.with_file_name("quiet-fleet-gone");
+    fs::write(&moved, text.replace(&src(&fleet), &gone.to_string_lossy())).unwrap();
+    let got = run(&c, &["add", "--check", "--quiet", "--budget", "5"]);
+    assert_eq!(got.code, 0, "{}", got.all());
+    assert_eq!(
+        got.out.trim(),
+        "",
+        "could not ask is not a notice: {}",
+        got.out
+    );
+    let loud = run(&c, &["add", "--check"]);
+    assert!(loud.out.contains("could not be checked"), "{}", loud.out);
+
+    assert_eq!(
+        run(&c, &["add", "--check", "--budget", "0"]).code,
+        2,
+        "usage"
+    );
+}
+
+/// The session hook, end to end: a consumer whose fleet moved is told at
+/// session start, once an hour, and a current one hears nothing about it.
+#[test]
+fn the_session_hook_says_when_the_vendored_decisions_are_behind() {
+    let fleet = producer("hook-fleet");
+    let c = consumer_pack_only("hook-consumer");
+    assert_eq!(run(&c, &["add", "--as", "fleet", &src(&fleet)]).code, 0);
+    assert_eq!(run(&c, &["hook", "install"]).code, 0);
+    let cache = c.join("cache-home");
+    let hook = |c: &Path| -> String {
+        let o = Command::new("sh")
+            .arg(".claude/hooks/aval-heads.sh")
+            .current_dir(c)
+            .env("XDG_CACHE_HOME", &cache)
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    Path::new(bin()).parent().unwrap().display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .output()
+            .expect("run the hook");
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    let quiet = hook(&c);
+    assert!(quiet.contains("ARCHITECTURE DECISIONS"), "{quiet}");
+    assert!(!quiet.contains("BEHIND THEIR SOURCE"), "{quiet}");
+
+    write(
+        &fleet,
+        "docs/adr/0009-more.md",
+        &record(
+            "ADR-0009",
+            "release.trigger",
+            Some("duro-stack"),
+            "a merge",
+            "first: true",
+        ),
+    );
+    assert_eq!(run(&fleet, &["heads", "--write"]).code, 0);
+    assert_eq!(run(&fleet, &["pack", "--write"]).code, 0);
+    git(&fleet, &["add", "-A"]);
+    git(&fleet, &["commit", "-qm", "another decision"]);
+
+    // The stamp from the first run is fresh: the hook does not ask again
+    // within the hour, so the move is not seen yet…
+    let stamped = hook(&c);
+    assert!(!stamped.contains("BEHIND THEIR SOURCE"), "{stamped}");
+    // …until the stamp ages out.
+    let stamp = fs::read_dir(cache.join("aval"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|x| x == "pack-check"))
+        .expect("the hook left a stamp under the cache directory");
+    fs::remove_file(&stamp).unwrap();
+    let told = hook(&c);
+    assert!(told.contains("BEHIND THEIR SOURCE"), "{told}");
+    assert!(told.contains("behind"), "{told}");
+    assert!(told.contains("aval add"), "{told}");
+    assert!(
+        told.find("BEHIND THEIR SOURCE") < told.find("ARCHITECTURE DECISIONS"),
+        "the notice comes before the heads it qualifies: {told}"
+    );
+    assert!(
+        !c.join(".claude").join(".aval-pack-check").exists()
+            && fs::read_dir(&c)
+                .unwrap()
+                .flatten()
+                .all(|e| { !e.file_name().to_string_lossy().contains("pack-check") }),
+        "nothing is written into the repository"
+    );
+}
+
 #[test]
 fn add_check_is_quiet_where_nothing_is_vendored() {
     let c = consumer_with_corpus("nocheck-consumer");

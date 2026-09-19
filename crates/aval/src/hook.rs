@@ -10,11 +10,23 @@
 //! proven across several repositories and a second shape would be a second
 //! thing to learn. Two differences, both because this payload is local:
 //!
-//! - **No cache, no TTL, no staging file.** duro fetches a catalog over the
-//!   network, so it caches. `aval heads` reads a directory this repository
-//!   already contains, on the same code path the pre-commit gate runs, so
-//!   caching would only add a way to be stale.
-//! - **Nothing to add to `.gitignore`**, because nothing is written at runtime.
+//! - **No cache for the heads.** duro fetches a catalog over the network, so
+//!   it caches. `aval heads` reads a directory this repository already
+//!   contains, on the same code path the pre-commit gate runs, so caching
+//!   would only add a way to be stale.
+//! - **Nothing to add to `.gitignore`**, because nothing is written into the
+//!   repository at runtime. The one thing written anywhere is the pack-check
+//!   stamp, under the user's cache directory, keyed by repository path.
+//!
+//! The pack check is the exception to "local only", and it is bounded on
+//! every side. Vendored packs go stale silently — a fleet decision merged
+//! upstream reached no consumer until somebody remembered `aval add --check`
+//! — so the hook asks, at most once an hour per repository, under a budget
+//! that kills the remote call rather than waiting on it, and speaks only
+//! when a pack is BEHIND or EDITED. Offline, a slow remote, lost access:
+//! silence, on purpose. A notice that fired on every flaky network would be
+//! the one nobody read on the day a decision changed. `aval add --check` by
+//! hand still answers in full.
 //!
 //! The preamble's last paragraph is there because of a specific mistake made
 //! while building this. Two sync transports were live in one repository, each
@@ -57,6 +69,29 @@ command -v aval >/dev/null 2>&1 || exit 0
 # reporting a broken corpus is the gate's job, not this one's.
 heads=$(aval heads 2>/dev/null) || exit 0
 [ -n "$heads" ] || exit 0
+
+# Vendored packs: are they still what their sources publish? This is the one
+# network call here, and it is bounded on every side: at most once an hour per
+# repository (a stamp under the user's cache directory, never in the
+# repository), a budget that kills the remote call, and a voice only when a
+# pack is BEHIND or EDITED. "Could not ask" prints nothing — a notice that
+# fires on a flaky network is the one nobody reads on the day it matters.
+# `aval add --check` by hand answers in full.
+stale=""
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/aval"
+stamp="$cache/$(printf '%s' "$PWD" | cksum | cut -d' ' -f1).pack-check"
+if [ -z "$(find "$stamp" -mmin -60 2>/dev/null)" ]; then
+  mkdir -p "$cache" 2>/dev/null && : > "$stamp" 2>/dev/null
+  stale=$(aval add --check --quiet --budget 5 2>/dev/null)
+  [ $? -eq 1 ] || stale=""
+fi
+if [ -n "$stale" ]; then
+  cat <<'STALE'
+VENDORED DECISIONS ARE BEHIND THEIR SOURCE. The fleet has decided something
+this repository has not adopted yet, so the heads below may be superseded:
+STALE
+  printf '%s\n\n' "$stale"
+fi
 
 cat <<'PREAMBLE'
 ARCHITECTURE DECISIONS — these are decided. Do not re-litigate them, and do

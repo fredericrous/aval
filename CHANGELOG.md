@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added
+
+- **The session hook says when the vendored decisions are behind.** A pack
+  went stale silently: a fleet decision merged upstream reached no consumer
+  until somebody remembered `aval add --check`, and nothing ever prompted
+  them to. The hook now asks, bounded on every side — at most once an hour
+  per repository (a stamp under `~/.cache/aval`, never in the repository), a
+  five-second budget that kills the remote call, and a voice only when a pack
+  is behind or edited, printed above the heads it qualifies. Offline or a
+  slow remote is silence, on purpose. Re-run `aval hook install` to pick the
+  new script up; `aval hook install --check` reports the old one as stale.
+- **`aval add --check --quiet` and `--budget <seconds>`.** `--quiet` prints
+  nothing when every pack is current or cannot be asked, and only the packs
+  that need a person when one does — the hook's voice, and a CI job's.
+  `--budget` kills a git call that has not answered in time and counts it as
+  `unknown`; under a budget git never prompts.
+- **A CI recipe for consumers** in the README: an advisory, non-blocking job
+  that runs the check where the runner can reach the source.
+
 ## v1.3.2
 
 ### Fixed

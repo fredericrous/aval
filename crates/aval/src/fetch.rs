@@ -30,7 +30,26 @@
 //! second thing to get wrong.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+/// A wall-clock budget every git call in this process shares. Set by
+/// `add --check --budget N` for callers that must not wait on a remote —
+/// the session hook above all — and unset otherwise, when a person is at
+/// the keyboard and can press ^C. Process-wide because the budget is a
+/// property of the invocation, not of any one call, and threading it
+/// through every signature would put a clock in functions that have no
+/// business knowing one.
+static DEADLINE: Mutex<Option<Instant>> = Mutex::new(None);
+
+pub fn set_budget(seconds: u64) {
+    *DEADLINE.lock().expect("deadline lock") = Some(Instant::now() + Duration::from_secs(seconds));
+}
+
+fn deadline() -> Option<Instant> {
+    *DEADLINE.lock().expect("deadline lock")
+}
 
 /// A source, as the user wrote it.
 #[derive(Debug)]
@@ -47,9 +66,50 @@ fn git(args: &[&str], in_dir: Option<&Path>) -> Result<String, String> {
     if let Some(d) = in_dir {
         c.current_dir(d);
     }
-    let o = c
-        .output()
+    // Never a prompt. A hook or a CI job that asks a remote must fail when
+    // the remote asks for a password, not hang on a question nobody sees.
+    // `GIT_SSH_COMMAND` is set only when the user has not, so a custom ssh
+    // survives.
+    c.env("GIT_TERMINAL_PROMPT", "0");
+    if std::env::var_os("GIT_SSH_COMMAND").is_none() && std::env::var_os("GIT_SSH").is_none() {
+        c.env(
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o ConnectTimeout=5",
+        );
+    }
+    let Some(deadline) = deadline() else {
+        let o = c
+            .output()
+            .map_err(|e| format!("cannot run git: {} — it has to be on PATH", e))?;
+        if !o.status.success() {
+            return Err(String::from_utf8_lossy(&o.stderr).trim().to_string());
+        }
+        return Ok(String::from_utf8_lossy(&o.stdout).to_string());
+    };
+    // Under a budget: poll, and kill at the deadline. A killed remote call
+    // is an `unknown`, never a verdict.
+    c.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = c
+        .spawn()
         .map_err(|e| format!("cannot run git: {} — it has to be on PATH", e))?;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {}
+            Err(e) => return Err(format!("waiting for git: {e}")),
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("no answer within the budget".to_string());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let o = child
+        .wait_with_output()
+        .map_err(|e| format!("waiting for git: {e}"))?;
     if !o.status.success() {
         return Err(String::from_utf8_lossy(&o.stderr).trim().to_string());
     }
@@ -288,6 +348,42 @@ impl Drop for Scratch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Under a budget, a remote that never answers is an error naming the
+    /// budget, inside the budget — not a hang. The "remote" is an ssh
+    /// command that sleeps, so this runs offline and deterministically.
+    #[test]
+    fn a_budget_kills_a_remote_call_that_does_not_answer() {
+        let dir = std::env::temp_dir().join(format!("aval-budget-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sleeper = dir.join("ssh-that-sleeps.sh");
+        std::fs::write(&sleeper, "#!/bin/sh\nsleep 30\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&sleeper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // Process-wide, like the budget itself; nothing else in this binary
+        // reaches an ssh remote.
+        std::env::set_var("GIT_SSH_COMMAND", sleeper.to_string_lossy().to_string());
+        set_budget(1);
+        let started = Instant::now();
+        let got = resolve(&Source {
+            label: "git@localhost:nowhere.git".into(),
+            url: "git@localhost:nowhere.git".into(),
+            rev: "main".into(),
+        });
+        let elapsed = started.elapsed();
+        *DEADLINE.lock().unwrap() = None;
+        std::env::remove_var("GIT_SSH_COMMAND");
+        let err = got.expect_err("a remote that never answers is not resolved");
+        assert!(err.contains("budget"), "{err}");
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "killed at the deadline, not at ssh's leisure: {elapsed:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn shorthands_and_urls_become_git_urls() {
