@@ -79,6 +79,25 @@ Repo-specific caveats go in `.claude/aval-hook.local.md`. The hook appends that
 file; installing again never touches it. `--check` is the drift detector for
 CI: exit 0 wired, exit 1 stale.
 
+Where the repository vendors packs, the hook also asks whether they are still
+what their sources publish — at most once an hour per repository, under a
+five-second budget that kills the remote call rather than waiting on it, and
+speaking only when a pack is behind or edited:
+
+```
+VENDORED DECISIONS ARE BEHIND THEIR SOURCE. The fleet has decided something
+this repository has not adopted yet, so the heads below may be superseded:
+  behind    fleet has 1bb600e, main now names e73638d
+
+1 pack(s) behind. Run `aval add <source>` for each, read the diff, then `aval heads --write`.
+```
+
+Offline, a slow remote, lost access: silence, on purpose. A notice that fired
+on every flaky network would be the one nobody read on the day a decision
+changed. The stamp that rates the hour lives under `$XDG_CACHE_HOME/aval`
+(default `~/.cache/aval`), never in the repository. `aval add --check` by hand
+always answers in full.
+
 The hook pushes; **`aval mcp` lets an agent pull** — the same answers as native
 tools, asked at the moment the question comes up rather than only at the top of
 a session:
@@ -155,7 +174,7 @@ different edges:
 | `aval hook install [--check]` | put the heads in front of an agent at session start |
 | `aval pack [--write\|--check]` | publish this corpus's declarations for others to read |
 | `aval add <source>… [--dry-run]` | vendor another repository's declarations |
-| `aval add --check` | are the vendored packs still what their revisions name |
+| `aval add --check [--quiet] [--budget S]` | are the vendored packs still what their revisions name; `--quiet` speaks only when one is not, `--budget` kills a remote call that has not answered in S seconds |
 
 ## Rules: what a decision does not settle
 
@@ -232,6 +251,33 @@ a disagreement with the fleet's answer at the fleet's scope.
 
 Nothing in a pack is ever executed, so there is no trust prompt to match
 `amont trust`. The review gate is the pull request that adds the file.
+
+A pack goes stale silently otherwise, so there are two ways to be told. The
+session hook asks (see [In front of an agent](#in-front-of-an-agent)). And a
+consumer's CI can ask, as an advisory job, where its runner holds a credential
+that can read the source — a private corpus is reachable from a private
+consumer's runner with a deploy key, not from a public one's without:
+
+```yaml
+  packs:
+    name: vendored decisions are current (advisory, non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: webfactory/ssh-agent@v0.9.0   # or however the runner reaches the source
+        with:
+          ssh-private-key: ${{ secrets.DECISIONS_READ_KEY }}
+      - run: |
+          if ! aval add --check --quiet --budget 30 > packs.txt; then
+            cat packs.txt
+            echo "::warning::vendored decisions are behind or edited — run aval add"
+          fi
+```
+
+Non-blocking for the same reason a dependency advisory is: a decision that
+changed upstream is information about the fleet, not a defect in the change
+under review.
 
 That "inert" scopes to execution. A pack's text does reach an agent's context,
 so the hook and the MCP tools both say that a record's wording is data rather

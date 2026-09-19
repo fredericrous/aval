@@ -68,7 +68,9 @@ USAGE
     aval hook install [--check]            put the heads in front of an agent
     aval pack [--write | --check]          this corpus's declarations, for others to read
     aval add <source>… [--dry-run]         vendor another repository's declarations
-    aval add --check                       are the vendored packs still current
+    aval add --check [--quiet]             are the vendored packs still current;
+                     [--budget <seconds>]  --quiet speaks only when one is not,
+                                           --budget kills a remote call late
     aval mcp                               serve the corpus as MCP tools on
                                            stdio, read-only, until stdin closes
     aval repos                             what is answering from here: this
@@ -121,6 +123,8 @@ struct Args {
     write: bool,
     check: bool,
     dry_run: bool,
+    quiet: bool,
+    budget: Option<u64>,
     dir: PathBuf,
 }
 
@@ -139,6 +143,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         write: false,
         check: false,
         dry_run: false,
+        quiet: false,
+        budget: None,
         dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     };
     let mut i = 0;
@@ -154,6 +160,28 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--write" => a.write = true,
             "--check" => a.check = true,
             "--dry-run" => a.dry_run = true,
+            "--quiet" => a.quiet = true,
+            "--budget" => {
+                i += 1;
+                let value = argv.get(i).ok_or("`--budget` needs a number of seconds")?;
+                a.budget = Some(
+                    value
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| format!("`--budget` wants whole seconds, not `{value}`"))?,
+                );
+            }
+            s if s.starts_with("--budget=") => {
+                let value = &s[9..];
+                a.budget = Some(
+                    value
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| format!("`--budget` wants whole seconds, not `{value}`"))?,
+                );
+            }
             "--scope" => {
                 i += 1;
                 a.scope = Some(argv.get(i).ok_or("`--scope` needs a value")?.clone());
@@ -793,19 +821,32 @@ fn cmd_pack(args: &Args) -> i32 {
 /// superseded, which is precisely the failure the whole tool exists to
 /// prevent.
 ///
-/// It reaches the network, so it is human-run and nothing calls it. The gate
-/// does not, the hook does not, and CI cannot — the corpus this was built for
-/// is private on a forge the consumers' CI has no credential for. That is a
-/// real cost, and it is stated rather than papered over: a fleet decision that
-/// changes has to be re-added in each consumer, by a person, on purpose.
+/// It reaches the network. Until 1.4 that meant nothing called it — a
+/// fleet decision that changed had to be re-added in each consumer by a
+/// person who remembered to ask, and ADR-0017 in the fleet corpus was
+/// merged into a corpus that no consumer would learn about. Now the
+/// session hook asks, under `--budget` and `--quiet`: at most once an hour
+/// per repository, killed at the deadline, and speaking only when a pack
+/// is behind or edited. "Could not ask" prints nothing there, because a
+/// notice that fires on a flaky network is the notice nobody reads on the
+/// day it matters. The gate still does not call it (a commit must not
+/// wait on a remote), and CI may, as an advisory job, where the runner
+/// holds a credential for the source — a private corpus is reachable from
+/// a private consumer's runner, not from a public one's.
 fn cmd_add_check(args: &Args) -> i32 {
+    if let Some(seconds) = args.budget {
+        aval::fetch::set_budget(seconds);
+    }
+    let quiet = args.quiet;
     let l = match loaded(args) {
         Ok(l) => l,
         Err(c) => return c,
     };
     let packs = &l.graph.registry().packs;
     if packs.is_empty() {
-        println!("aval: this repository vendors no packs");
+        if !quiet {
+            println!("aval: this repository vendors no packs");
+        }
         return 0;
     }
 
@@ -816,19 +857,25 @@ fn cmd_add_check(args: &Args) -> i32 {
         let o = match o {
             Ok(o) => o,
             Err(e) => {
-                println!("  {:<9} {}", "unmarked", e);
+                if !quiet {
+                    println!("  {:<9} {}", "unmarked", e);
+                }
                 unknown += 1;
                 continue;
             }
         };
         match add::standing(&l.root, &o) {
-            add::Standing::Current => println!(
-                "  {:<9} {} @ {}  ({})",
-                "current",
-                o.name,
-                aval::fetch::short(&o.commit),
-                o.source
-            ),
+            add::Standing::Current => {
+                if !quiet {
+                    println!(
+                        "  {:<9} {} @ {}  ({})",
+                        "current",
+                        o.name,
+                        aval::fetch::short(&o.commit),
+                        o.source
+                    )
+                }
+            }
             add::Standing::Edited => {
                 edited += 1;
                 println!(
@@ -852,20 +899,24 @@ fn cmd_add_check(args: &Args) -> i32 {
             }
             add::Standing::Unknown(e) => {
                 unknown += 1;
-                println!("  {:<9} {}: {}", "unknown", o.name, first_line(&e));
+                if !quiet {
+                    println!("  {:<9} {}: {}", "unknown", o.name, first_line(&e));
+                }
             }
             add::Standing::Unmarked => {
                 unknown += 1;
-                println!(
-                    "  {:<9} {}: `{}` is not a source this version understands",
-                    "unknown", o.name, o.source
-                );
+                if !quiet {
+                    println!(
+                        "  {:<9} {}: `{}` is not a source this version understands",
+                        "unknown", o.name, o.source
+                    );
+                }
             }
         }
     }
 
     if behind + edited == 0 {
-        if unknown > 0 {
+        if unknown > 0 && !quiet {
             println!(
                 "\n{} pack(s) could not be checked. Being unable to ask is not an answer.",
                 unknown
