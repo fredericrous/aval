@@ -1,5 +1,35 @@
 # Changelog
 
+## v1.5.0
+
+### Added
+
+- **The session hook names the aval that wrote it, and `--check` reads it
+  back.** Until now the script's bytes were its only version, so the day a
+  workstation upgraded and ran `aval hook install`, every CI job pinned to the
+  release before called the script stale — the 1.4.0 fan-out went red on
+  every consumer for exactly this. The script's second line is now
+  `# aval-hook: written by aval X.Y.Z`. The same release compares bytes as
+  before; an older release, or a script with no marker, is stale; a **newer**
+  release is not stale (`newer`, exit 0), and `install` under an older aval
+  leaves it alone rather than downgrading it — `rm` it to reinstall. Exit 0
+  still needs the settings entry wired. Prerelease order follows semver.
+- **`hook install` notes `AVAL_VERSION` pins that disagree with it.** Both
+  modes read every `AVAL_VERSION:` line under `.github/workflows` and
+  `.forgejo/workflows` and print `note <file>:<line> pins AVAL_VERSION …` for
+  each one behind or ahead of the running aval. Advisory: never an exit code,
+  never an edit to a workflow. A pin CI cannot read (`${{ vars.X }}`) is
+  silent.
+
+### Rollout
+
+Bump `AVAL_VERSION` to 1.5.0 and run `aval hook install` in the same PR —
+either half alone is red: 1.4.0 sees new bytes, 1.5.0 sees a script with no
+marker. This is the last release where a pin bump and a hook reinstall must
+travel together: from 1.5.0 a script written by a newer aval is not stale, so
+reinstalling ahead of the pin is green. A pin bumped ahead of a reinstall is
+still stale, on purpose.
+
 ## v1.4.0
 
 ### Added

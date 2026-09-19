@@ -288,35 +288,264 @@ fn the_hook_says_nothing_about_rules_when_there_are_none() {
     assert!(!got.out.contains("RULES"), "{}", got.out);
 }
 
-/// The script's bytes are its version. A consumer holding the 1.1.0 script is
-/// told it is stale, which is the only mechanism there is for shipping a change
-/// to it.
+fn script_path(r: &Path) -> PathBuf {
+    r.join(".claude/hooks/aval-heads.sh")
+}
+
+/// The generated script with its marker line replaced by `version`, and the
+/// body optionally changed so the bytes differ from what this aval writes.
+fn script_as_if_written_by(version: &str, change_body: bool) -> String {
+    let current = aval::hook::script();
+    let mut lines: Vec<String> = current.lines().map(str::to_string).collect();
+    assert!(
+        lines[1].starts_with(aval::hook::VERSION_MARKER),
+        "{}",
+        lines[1]
+    );
+    lines[1] = format!("{}{}", aval::hook::VERSION_MARKER, version);
+    if change_body {
+        lines.push("echo 'a line a later release added'".to_string());
+    }
+    let mut s = lines.join("\n");
+    s.push('\n');
+    assert_ne!(
+        s, current,
+        "the fixture must differ, or this asserts nothing"
+    );
+    s
+}
+
+/// A consumer holding a script from 1.4.0 or earlier — no marker line — is
+/// told it is stale, once. From then on the header answers.
 #[test]
-fn the_1_1_0_script_reads_as_stale() {
+fn a_headerless_script_reads_as_stale() {
     let r = scratch("stale-script");
     assert_eq!(run(&r, &["hook", "install"]).code, 0);
 
-    let current = aval::hook::SCRIPT;
+    let current = aval::hook::script();
     let start = current
         .find("# The rules the decisions")
         .expect("the rules block");
     let end = current
         .find("if [ -s \"$notes\" ]")
         .expect("the notes block");
-    let previous = format!("{}{}", &current[..start], &current[end..]);
-    assert_ne!(
-        previous, current,
-        "the fixture must differ, or this asserts nothing"
+    let previous = format!("{}{}", &current[..start], &current[end..]).replace(
+        &format!(
+            "{}{}\n",
+            aval::hook::VERSION_MARKER,
+            env!("CARGO_PKG_VERSION")
+        ),
+        "",
     );
-    fs::write(r.join(".claude/hooks/aval-heads.sh"), &previous).unwrap();
+    assert!(!previous.contains("aval-hook: written by"), "{}", previous);
+    fs::write(script_path(&r), &previous).unwrap();
 
     let got = run(&r, &["hook", "install", "--check"]);
     assert_eq!(got.code, 1, "{}{}", got.out, got.err);
     assert!(got.out.contains("stale"), "{}", got.out);
+    assert!(got.out.contains("no version header"), "{}", got.out);
     assert!(got.out.contains("out of date"), "{}", got.out);
 
     assert_eq!(run(&r, &["hook", "install"]).code, 0);
     assert_eq!(run(&r, &["hook", "install", "--check"]).code, 0);
+}
+
+#[test]
+fn a_malformed_header_reads_as_stale() {
+    let r = scratch("malformed-header");
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    fs::write(script_path(&r), script_as_if_written_by("banana", false)).unwrap();
+
+    let got = run(&r, &["hook", "install", "--check"]);
+    assert_eq!(got.code, 1, "{}{}", got.out, got.err);
+    assert!(got.out.contains("no version header"), "{}", got.out);
+}
+
+#[test]
+fn a_script_from_an_older_aval_is_stale() {
+    let r = scratch("older-script");
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    fs::write(script_path(&r), script_as_if_written_by("0.0.1", false)).unwrap();
+
+    let got = run(&r, &["hook", "install", "--check"]);
+    assert_eq!(got.code, 1, "{}{}", got.out, got.err);
+    assert!(got.out.contains("written by aval 0.0.1"), "{}", got.out);
+
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    assert_eq!(
+        fs::read_to_string(script_path(&r)).unwrap(),
+        aval::hook::script()
+    );
+}
+
+/// Same release, different bytes: the header does not excuse a hand edit.
+#[test]
+fn a_hand_edit_at_the_same_version_is_stale() {
+    let r = scratch("same-version-edit");
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    fs::write(
+        script_path(&r),
+        script_as_if_written_by(env!("CARGO_PKG_VERSION"), true),
+    )
+    .unwrap();
+
+    let got = run(&r, &["hook", "install", "--check"]);
+    assert_eq!(got.code, 1, "{}{}", got.out, got.err);
+    assert!(got.out.contains("(regenerated)"), "{}", got.out);
+}
+
+/// The reason the header exists: a workstation that upgraded first must not
+/// redden CI pinned to the release before it, and an older aval must not
+/// downgrade what a newer one wrote.
+#[test]
+fn a_script_from_a_newer_aval_is_not_stale_and_install_leaves_it() {
+    let r = scratch("newer-script");
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    let newer = script_as_if_written_by("999.0.0", true);
+    fs::write(script_path(&r), &newer).unwrap();
+
+    let got = run(&r, &["hook", "install", "--check"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(got.out.contains("newer"), "{}", got.out);
+    assert!(got.out.contains("written by aval 999.0.0"), "{}", got.out);
+    assert!(got.out.contains("up to date"), "{}", got.out);
+
+    let got = run(&r, &["hook", "install"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(got.out.contains("left alone"), "{}", got.out);
+    assert_eq!(
+        fs::read_to_string(script_path(&r)).unwrap(),
+        newer,
+        "install must not downgrade a newer script"
+    );
+}
+
+/// A newer script is not stale; the settings beside it still can be. Exit 0
+/// means wired AND current-or-newer, never one without the other.
+#[test]
+fn a_newer_script_does_not_excuse_unwired_settings() {
+    let r = scratch("newer-unwired");
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    let newer = script_as_if_written_by("999.0.0", true);
+    fs::write(script_path(&r), &newer).unwrap();
+
+    for broken in [
+        None,
+        Some(
+            r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"sh .claude/hooks/other.sh"}]}]}}"#,
+        ),
+    ] {
+        match broken {
+            None => fs::remove_file(r.join(".claude/settings.json")).unwrap(),
+            Some(body) => fs::write(r.join(".claude/settings.json"), body).unwrap(),
+        }
+        let got = run(&r, &["hook", "install", "--check"]);
+        assert_eq!(got.code, 1, "{:?}: {}{}", broken, got.out, got.err);
+        assert!(got.out.contains("newer"), "{}", got.out);
+        assert!(
+            got.out.contains("stale  .claude/settings.json"),
+            "{}",
+            got.out
+        );
+
+        let got = run(&r, &["hook", "install"]);
+        assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+        assert!(settings(&r).contains("sh .claude/hooks/aval-heads.sh"));
+        assert_eq!(
+            fs::read_to_string(script_path(&r)).unwrap(),
+            newer,
+            "only the settings were written"
+        );
+        assert_eq!(run(&r, &["hook", "install", "--check"]).code, 0);
+    }
+}
+
+#[test]
+fn a_newer_script_with_invalid_settings_touches_nothing() {
+    let r = scratch("newer-bad-json");
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    let newer = script_as_if_written_by("999.0.0", true);
+    fs::write(script_path(&r), &newer).unwrap();
+    fs::write(r.join(".claude/settings.json"), "{ not json").unwrap();
+
+    for args in [
+        &["hook", "install", "--check"][..],
+        &["hook", "install"][..],
+    ] {
+        let got = run(&r, args);
+        assert_eq!(got.code, 3, "{:?}: {}{}", args, got.out, got.err);
+        assert_eq!(fs::read_to_string(script_path(&r)).unwrap(), newer);
+        assert_eq!(settings(&r), "{ not json");
+    }
+}
+
+// --- workflow pins --------------------------------------------------------
+
+fn workflow(r: &Path, rel: &str, body: &str) {
+    let p = r.join(rel);
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    fs::write(p, body).unwrap();
+}
+
+/// One line per pin that disagrees with the running aval, in both modes, on
+/// stdout, and never in the exit code: the pin is CI's to move, and a lagging
+/// one can be a decision.
+#[test]
+fn a_pin_behind_or_ahead_is_noted_and_never_changes_the_exit_code() {
+    let r = scratch("pins");
+    let bare = run(&r, &["hook", "install", "--check"]);
+    assert_eq!(bare.code, 1);
+    assert!(!bare.out.contains("note"), "{}", bare.out);
+
+    workflow(
+        &r,
+        ".github/workflows/adr.yaml",
+        "jobs:\n  adr:\n    steps:\n      - name: Ensure aval\n        env:\n          AVAL_VERSION: 0.1.0\n        run: echo \"$AVAL_VERSION\" ${AVAL_VERSION}\n",
+    );
+    workflow(
+        &r,
+        ".forgejo/workflows/ci.yml",
+        "env:\n  AVAL_VERSION: 999.0.0\nsteps:\n  - env:\n      AVAL_VERSION: 0.1.0\n",
+    );
+    workflow(&r, ".github/workflows/notes.md", "AVAL_VERSION: 0.1.0\n");
+    fs::write(
+        r.join(".github/workflows/bad.yaml"),
+        [0xff, 0xfe, b'A', b'V'].as_slice(),
+    )
+    .unwrap();
+
+    let expected = [
+        "  note   .github/workflows/adr.yaml:6 pins AVAL_VERSION 0.1.0; this is ",
+        "  note   .forgejo/workflows/ci.yml:5 pins AVAL_VERSION 0.1.0; this is ",
+        "  note   .forgejo/workflows/ci.yml:2 pins AVAL_VERSION 999.0.0, ahead of this ",
+    ];
+    let got = run(&r, &["hook", "install", "--check"]);
+    assert_eq!(got.code, bare.code, "{}{}", got.out, got.err);
+    assert_eq!(got.out.matches("  note   ").count(), 3, "{}", got.out);
+    for e in expected {
+        assert!(got.out.contains(e), "missing {:?} in {}", e, got.out);
+    }
+
+    let got = run(&r, &["hook", "install"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert_eq!(got.out.matches("  note   ").count(), 3, "{}", got.out);
+    for e in expected {
+        assert!(got.out.contains(e), "missing {:?} in {}", e, got.out);
+    }
+    assert_eq!(run(&r, &["hook", "install", "--check"]).code, 0);
+}
+
+#[test]
+fn a_pin_equal_to_the_running_aval_is_silent() {
+    let r = scratch("pins-current");
+    workflow(
+        &r,
+        ".github/workflows/adr.yaml",
+        &format!("env:\n  AVAL_VERSION: {}\n", env!("CARGO_PKG_VERSION")),
+    );
+    let got = run(&r, &["hook", "install"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(!got.out.contains("note"), "{}", got.out);
 }
 
 /// The property that makes this safe to commit: a session must not fail, or

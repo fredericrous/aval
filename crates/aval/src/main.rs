@@ -730,8 +730,28 @@ fn cmd_hook(args: &Args) -> i32 {
             hook::Status::Written => "wrote",
             hook::Status::Unchanged => "ok",
             hook::Status::Stale => "stale",
+            hook::Status::Newer => "newer",
         };
         println!("  {:<6} {}  ({})", word, c.path, c.detail);
+    }
+
+    // Advisory, in both modes, and never the exit code: a workflow pinning an
+    // older aval will call the script this one writes stale until the pin
+    // moves, and this line is the only thing that says so before CI does.
+    // Plain stdout rather than `::notice::` — the workflow's own echo speaks
+    // CI's vocabulary; this tool does not.
+    let running = hook::Version::running();
+    for p in &report.pins_behind {
+        println!(
+            "  note   {}:{} pins AVAL_VERSION {}; this is {} — bump the pin in the same change",
+            p.path, p.line, p.version, running
+        );
+    }
+    for p in &report.pins_ahead {
+        println!(
+            "  note   {}:{} pins AVAL_VERSION {}, ahead of this {} — its --check will call a script from this aval stale",
+            p.path, p.line, p.version, running
+        );
     }
 
     if args.check {

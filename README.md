@@ -79,6 +79,20 @@ Repo-specific caveats go in `.claude/aval-hook.local.md`. The hook appends that
 file; installing again never touches it. `--check` is the drift detector for
 CI: exit 0 wired, exit 1 stale.
 
+The script's second line names the aval that wrote it:
+
+```sh
+#!/bin/sh
+# aval-hook: written by aval 1.5.0
+```
+
+A script from a **newer** aval is not stale, and an older aval leaves it alone
+rather than downgrading it, so a workstation that upgrades first does not
+redden a CI job pinned to the release before. Both modes also print a `note`
+for every `AVAL_VERSION:` pin under `.github/workflows` or `.forgejo/workflows`
+that is behind or ahead of the running aval — advisory, never an exit code,
+never an edit to the workflow.
+
 Where the repository vendors packs, the hook also asks whether they are still
 what their sources publish — at most once an hour per repository, under a
 five-second budget that kills the remote call rather than waiting on it, and
