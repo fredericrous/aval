@@ -1114,7 +1114,7 @@ Low codes follow the duro CLI. Verdicts start at 4.
 | `aval show` | A | `0` · `2` · `3` · `7` |
 | `aval history` | A | `0` · `2` · `3` · `7` |
 | `aval hook install` | — | `0` · `1` write failed · `2` · `3` unreadable settings |
-| `aval hook install --check` | — | `0` wired · `1` stale · `2` · `3` |
+| `aval hook install --check` | — | `0` wired, and the script current or from a newer aval · `1` stale · `2` · `3` |
 | `aval pack` | A | `0` · `2` · `3` |
 | `aval pack --write` | A | `0` · `1` write failed · `2` · `3` |
 | `aval pack --check` | A + C | `0` fresh or not publishing · `1` stale · `2` · `3` |
@@ -1141,6 +1141,24 @@ flaky network would be ignored on the day a pack was behind. `--budget` makes
 call is killed, the standing is `unknown`, and the exit code follows. Under a
 budget no git call may prompt: `GIT_TERMINAL_PROMPT=0` always, and
 `GIT_SSH_COMMAND` set to a non-interactive ssh unless the caller set one.
+
+The generated script's second line names the aval that wrote it. `--check`
+reads it back: the same release compares bytes, as before the marker; an older
+release, or a script from before 1.5.0 with no marker at all, is stale; a
+NEWER release is not stale, and `install` under an older aval leaves it alone
+in both modes rather than downgrading it — two people on different releases
+would otherwise take turns rewriting the file. Prerelease order follows semver
+(`1.5.0-rc1` is before `1.5.0`). That `0` still needs the settings entry wired:
+a newer script beside an unwired `settings.json` is `1`. It does not promise
+the bytes are a known release's output — a hand edit that also bumps the
+marker passes, because `--check` guards drift, not intent, and whoever can
+commit that file can commit anything.
+
+Both modes also read every `AVAL_VERSION:` pin under `.github/workflows` and
+`.forgejo/workflows` and print a `note` line for each one behind or ahead of
+the running aval, with the file and line. That is advisory: never an exit
+code, never an edit to a workflow. The pin is CI's to move, and a lagging pin
+can be a decision.
 
 `aval mcp` never exits `3`. It reads no corpus at startup, because a registry
 being edited must not take the surface away, and a corpus that will not load is
@@ -1301,8 +1319,9 @@ at all, so on a corpus that declares none they cannot fire and no verdict
 moves — which is the test the rule above actually sets. Two things a consumer
 does have to do, both stated in the changelog: a producer re-runs `aval pack
 --write` and each consumer re-runs `aval add`, and everybody re-runs `aval hook
-install`, because the script's bytes are its version and `--check` reports it
-stale until they do. One forward-compatibility limit is accepted rather than
+install`, because the script's header names the aval that wrote it (from 1.5.0;
+before that its bytes were its version) and `--check` under an older aval
+reports it stale until they do. One forward-compatibility limit is accepted rather than
 worked around: a pack carrying `rules:` is unreadable by aval before 1.2 —
 `pack-parses: unknown pack field` — which is the existing version gate doing
 what it exists to do, refusing a file it cannot fully understand rather than
