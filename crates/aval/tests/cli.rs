@@ -930,3 +930,144 @@ fn a_closed_stdout_ends_the_process_quietly() {
     // Ended by the signal, not by a successful exit it did not have.
     assert!(!status.success(), "{:?}", status);
 }
+
+// --- aval relevant ---------------------------------------------------------
+//
+// Retrieval at the input edge. Every test here is about the wall between it
+// and resolution: what it exits, what it says about itself, and that it never
+// invents an answer for a key nobody decided.
+
+/// A corpus with one decided key, one undecided key, and a record whose body
+/// names a directory — so all three path-free and path-bearing signals have
+/// something to bite on.
+fn ranked(name: &str) -> PathBuf {
+    let r = scratch(name);
+    write(
+        &r,
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [cloud]\nkeys:\n  storage.object-store:\n    \
+         description: Canonical S3-compatible object store\n  api.gateway:\n",
+    );
+    write(
+        &r,
+        "docs/adr/0001-object-store.md",
+        "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  \
+         - key: storage.object-store\n    choice: Ceph RGW\n    first: true\n\
+         ---\n# 0001 — Ceph RGW for object storage\n\nIt serves \
+         `kubernetes/data-storage/ceph`, and nothing else.\n",
+    );
+    r
+}
+
+#[test]
+fn relevant_ranks_a_key_and_exits_zero() {
+    let r = ranked("relevant-text");
+    let got = run(&r, &["relevant", "--text", "where do objects get stored"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(got.out.contains("storage.object-store"), "{}", got.out);
+    assert!(got.out.contains("active"), "{}", got.out);
+    // The obligation is on every rendering, not only the JSON one.
+    assert!(got.out.contains("aval resolve <key>"), "{}", got.out);
+}
+
+#[test]
+fn relevant_exits_zero_even_when_nothing_matches() {
+    // A thin answer is not a failure. Exit 0 is what keeps "I ranked and found
+    // little" out of the range that means "I could not look".
+    let r = ranked("relevant-nothing");
+    let got = run(&r, &["relevant", "--text", "quarterly expiry reversal"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(
+        got.out.contains("nothing in this corpus matched"),
+        "{}",
+        got.out
+    );
+}
+
+#[test]
+fn relevant_needs_something_to_rank_against() {
+    let r = ranked("relevant-usage");
+    assert_eq!(run(&r, &["relevant"]).code, 2);
+    assert_eq!(run(&r, &["relevant", "--text", "  "]).code, 2);
+    // A positional would be mistaken for a key, which this command does not take.
+    assert_eq!(run(&r, &["relevant", "storage.object-store"]).code, 2);
+    assert_eq!(run(&r, &["relevant", "--text", "x", "--top", "0"]).code, 2);
+    assert_eq!(run(&r, &["relevant", "--text", "x", "--all-repos"]).code, 2);
+}
+
+#[test]
+fn an_undeclared_scope_is_a_usage_error_not_a_thin_ranking() {
+    let r = ranked("relevant-scope");
+    let got = run(&r, &["relevant", "--text", "storage", "--scope", "clodu"]);
+    assert_eq!(got.code, 2, "{}{}", got.out, got.err);
+    assert!(got.err.contains("did you mean `cloud`"), "{}", got.err);
+}
+
+#[test]
+fn a_path_a_record_names_outranks_a_word_it_shares() {
+    let r = ranked("relevant-mention");
+    let got = run(
+        &r,
+        &[
+            "relevant",
+            "--path",
+            "kubernetes/data-storage/ceph/values.yaml",
+            "--json",
+        ],
+    );
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    let j = aval_core::json::parse(&got.out).expect("json");
+    let keys = j.get("keys").and_then(|k| k.as_arr()).expect("keys");
+    assert_eq!(
+        keys[0].get("key").and_then(|k| k.as_str()),
+        Some("storage.object-store"),
+        "{}",
+        got.out
+    );
+    let mentions = keys[0]
+        .get("why")
+        .and_then(|w| w.get("mentions"))
+        .and_then(|m| m.as_arr())
+        .expect("why.mentions");
+    assert_eq!(mentions.len(), 1, "{}", got.out);
+}
+
+#[test]
+fn the_json_carries_a_dependency_row_per_ranked_key() {
+    let r = ranked("relevant-deps");
+    let got = run(&r, &["relevant", "--text", "object gateway", "--json"]);
+    let j = aval_core::json::parse(&got.out).expect("json");
+    assert_eq!(j.get("kind").and_then(|k| k.as_str()), Some("suggestion"));
+    let keys = j.get("keys").and_then(|k| k.as_arr()).expect("keys").len();
+    let deps = j
+        .get("dependencies")
+        .and_then(|d| d.as_arr())
+        .expect("dependencies");
+    assert_eq!(deps.len(), keys, "one row per ranked key: {}", got.out);
+    // A router reads `unresolved` and nothing else to know it must stop.
+    assert!(
+        deps.iter()
+            .any(|d| d.get("unresolved") == Some(&aval_core::json::Json::Bool(true))),
+        "{}",
+        got.out
+    );
+}
+
+#[test]
+fn the_same_question_gives_the_same_order_twice() {
+    // SEMANTICS section 12: the ranking is a pure function of the corpus and
+    // the query. Two runs over an untouched tree must not differ at all.
+    let r = ranked("relevant-deterministic");
+    let args = ["relevant", "--text", "object storage gateway", "--json"];
+    assert_eq!(run(&r, &args).out, run(&r, &args).out);
+}
+
+#[test]
+fn relevant_reads_the_working_tree_when_asked() {
+    let r = ranked("relevant-changed");
+    // Not a git repository: `--changed` finds nothing and says so by ranking
+    // from nothing rather than by failing.
+    let got = run(&r, &["relevant", "--changed", "--text", "object"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(got.out.contains("storage.object-store"), "{}", got.out);
+}

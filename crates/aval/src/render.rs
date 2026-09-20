@@ -327,7 +327,11 @@ fn slot_row(g: &Graph, slot: Slot<'_>) -> Option<(&'static str, Vec<AdrId>, Opti
     Some((state, adrs, choice))
 }
 
-fn decided_at<'a>(g: &'a Graph, key: &str) -> Vec<(&'a str, &'static str, Vec<AdrId>)> {
+/// Public because `relevant` reports it beside a ranked key: a corpus that
+/// decides most keys per scope answers `undecided` at the default scope, which
+/// is true and, on its own, useless to somebody who wanted to know where to
+/// ask. Two callers, one producer.
+pub fn decided_at<'a>(g: &'a Graph, key: &str) -> Vec<(&'a str, &'static str, Vec<AdrId>)> {
     g.corpus()
         .slots()
         .into_iter()

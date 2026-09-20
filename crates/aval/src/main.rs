@@ -5,7 +5,7 @@
 //! section 14. The rule that shapes all of them is that a code meaning "I could
 //! not reach a verdict" never shares a range with a verdict.
 
-use aval::{add, heads, hook, links, load, migrate, packfile, render, status};
+use aval::{add, heads, hook, links, load, migrate, packfile, relevant, render, status};
 
 use aval_core::graph::Verdict;
 use aval_core::json::Json;
@@ -53,6 +53,10 @@ aval — the current architecture decision, as a typed answer
 
 USAGE
     aval resolve <key> [--scope <scope>]   what is decided, and nothing else
+    aval relevant [--path <p>]…            which keys bear on what you are about
+                  [--text <words>]         to touch, ranked. ADVISORY: a
+                  [--changed] [--top <n>]  suggestion, never a verdict — resolve
+                                           each key it names
     aval keys [--names]                    the vocabulary: every key, where it
                                            is answerable, where it is decided;
                                            --names omits where it is decided
@@ -83,6 +87,10 @@ SOURCES
 
 OPTIONS
     --json        machine output on stdout, warnings suppressed
+    --path        relevant: a file or directory you are about to touch; repeatable
+    --text        relevant: the task, in words
+    --changed     relevant: add what git reports modified, staged or untracked
+    --top         relevant: how many keys and rules to report (default 5)
     --level       rules: constraint or heuristic
     --adopted-by  rules: only those one record adopts
     --all         rules: inactive rules too, each with the reason
@@ -96,6 +104,7 @@ OPTIONS
 
 EXIT
     resolve  0 active · 4 undecided · 5 contradiction · 6 retired · 7 unknown
+    relevant 0 always · 2 usage, including an undeclared --scope
     rule     0 found · 7 unknown
     others   0 ok · 1 findings or stale
     always   1 tool failure · 2 usage · 3 unreadable or invalid corpus
@@ -125,7 +134,25 @@ struct Args {
     dry_run: bool,
     quiet: bool,
     budget: Option<u64>,
+    /// `relevant`: the paths to rank against, in the order they were given.
+    paths: Vec<String>,
+    /// `relevant`: the task description.
+    text: Option<String>,
+    /// `relevant`: add the working tree's modified, staged and untracked paths.
+    changed: bool,
+    /// `relevant`: how many rows to report.
+    top: Option<usize>,
     dir: PathBuf,
+}
+
+/// `--top`, which must be a count somebody could act on. Zero would ask for a
+/// ranking with no rows, which is a way of asking nothing.
+fn parse_top(value: &str) -> Result<usize, String> {
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| format!("`--top` wants a whole number above zero, not `{value}`"))
 }
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
@@ -145,6 +172,10 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         dry_run: false,
         quiet: false,
         budget: None,
+        paths: Vec::new(),
+        text: None,
+        changed: false,
+        top: None,
         dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     };
     let mut i = 0;
@@ -182,6 +213,26 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                         .ok_or_else(|| format!("`--budget` wants whole seconds, not `{value}`"))?,
                 );
             }
+            "--changed" => a.changed = true,
+            // Repeatable, and order-preserving: a caller naming three files
+            // named them in an order, and the report echoes it back.
+            "--path" => {
+                i += 1;
+                a.paths
+                    .push(argv.get(i).ok_or("`--path` needs a path")?.clone());
+            }
+            s if s.starts_with("--path=") => a.paths.push(s[7..].to_string()),
+            "--text" => {
+                i += 1;
+                a.text = Some(argv.get(i).ok_or("`--text` needs words")?.clone());
+            }
+            s if s.starts_with("--text=") => a.text = Some(s[7..].to_string()),
+            "--top" => {
+                i += 1;
+                let value = argv.get(i).ok_or("`--top` needs a count")?;
+                a.top = Some(parse_top(value)?);
+            }
+            s if s.starts_with("--top=") => a.top = Some(parse_top(&s[6..])?),
             "--scope" => {
                 i += 1;
                 a.scope = Some(argv.get(i).ok_or("`--scope` needs a value")?.clone());
@@ -260,6 +311,7 @@ fn emit_error(args: &Args, exit: i32, message: &str, findings: &[Finding]) {
 fn run(args: &Args) -> i32 {
     match args.command.as_str() {
         "resolve" => cmd_resolve(args),
+        "relevant" => cmd_relevant(args),
         "keys" => cmd_keys(args),
         "rules" => cmd_rules(args),
         "rule" => cmd_rule(args),
@@ -378,6 +430,60 @@ fn cmd_resolve(args: &Args) -> i32 {
         let _ = std::io::stdout().flush();
     }
     a.exit()
+}
+
+/// `aval relevant` — which decisions bear on what is about to be touched.
+///
+/// Exit 0 whatever it finds. This is the one command with no verdict to report:
+/// it ranks, and a ranking that found little is not a failure to look. The only
+/// non-zero codes are usage (§14) — including a `--scope` this corpus does not
+/// declare, which is a malformed question rather than a thin answer.
+fn cmd_relevant(args: &Args) -> i32 {
+    if !args.positional.is_empty() {
+        eprintln!(
+            "aval: `relevant` takes no positional arguments; say `--path <p>`, \
+             `--text <words>` or `--changed`"
+        );
+        return E_USAGE;
+    }
+    if args.all_repos {
+        // A ranking is over one corpus's vocabulary and one repository's paths.
+        // Merging several would compare BM25 scores computed against different
+        // document collections, which is arithmetic rather than a ranking.
+        eprintln!("aval: `relevant` ranks one corpus; use -C <repo>, not `--all-repos`");
+        return E_USAGE;
+    }
+    let q = relevant::Query {
+        paths: args.paths.clone(),
+        text: args.text.clone(),
+        changed: args.changed,
+        top: args.top.unwrap_or(relevant::DEFAULT_TOP),
+        scope: args
+            .scope
+            .clone()
+            .unwrap_or_else(|| DEFAULT_SCOPE.to_string()),
+    };
+    if q.is_empty() {
+        eprintln!(
+            "aval: `relevant` needs something to rank against: `--path <p>`, \
+             `--text <words>` or `--changed`"
+        );
+        return E_USAGE;
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    let r = relevant::relevant_in(&l, &q);
+    if args.json {
+        println!("{}", r.json);
+    } else if r.exit == 0 {
+        print!("{}", r.text);
+        let _ = std::io::stdout().flush();
+    } else {
+        eprint!("{}", r.text);
+    }
+    r.exit
 }
 
 /// The decision vocabulary.
