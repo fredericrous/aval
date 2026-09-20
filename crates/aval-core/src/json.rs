@@ -212,6 +212,19 @@ impl From<usize> for Json {
         }
     }
 }
+impl From<f64> for Json {
+    /// A non-finite float is **not JSON**, and there is no spelling of it that
+    /// is: `NaN` and `inf` would be written literally and rejected by every
+    /// reader. `null` is the honest value — "there is no number here" — and it
+    /// keeps a malformed line from reaching a client at all.
+    fn from(v: f64) -> Json {
+        if v.is_finite() {
+            Json::Num(v)
+        } else {
+            Json::Null
+        }
+    }
+}
 impl<T: Into<Json>> From<Vec<T>> for Json {
     fn from(v: Vec<T>) -> Json {
         Json::Arr(v.into_iter().map(Into::into).collect())
