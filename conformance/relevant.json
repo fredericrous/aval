@@ -1,0 +1,156 @@
+{
+  "description": [
+    "Conformance battery for `aval relevant`. Each case names a corpus under corpora/,",
+    "a query, and what the ranking must say. The harness rules are `resolve.json`'s:",
+    "`name` is the test name, an unknown field in `expected` throws rather than being",
+    "skipped, and `min_cases` keeps an empty or mis-parsed file from passing green.",
+    "",
+    "Two properties are asserted here that no other battery can reach.",
+    "",
+    "DETERMINISM. The harness runs every case TWICE and compares the whole payload",
+    "byte for byte. A ranking is a pure function of the corpus and the query",
+    "(SEMANTICS section 12), so a tokenizer that grew a rule, a stemmer that changed",
+    "its mind or a sort that fell back on directory order fails here rather than",
+    "silently reordering somebody's ranking six months later.",
+    "",
+    "THE ANNOTATIONS. A ranked key carries the verdict `resolve` gives it, not one the",
+    "ranker invented: `undecided` stays undecided, `contradiction` stays a stop, and",
+    "both are flagged `unresolved` in `dependencies` for a router. That is the whole",
+    "reason relevance is allowed to exist alongside an exact resolver (section 5.1).",
+    "",
+    "`paths` in a case name files that do NOT exist in this repository, on purpose:",
+    "the co-change signal reads `git log`, so a fixture path that existed here would",
+    "make the expected order depend on this repository's own history and stop being",
+    "reproducible from a shallow clone."
+  ],
+  "min_cases": 12,
+  "cases": [
+    {
+      "name": "text_ranks_the_key_it_describes",
+      "corpus": "relevance-sample",
+      "query": { "text": "where do we keep objects in buckets" },
+      "expected": {
+        "order": ["storage.object-store"],
+        "states": { "storage.object-store": "active" },
+        "adrs": { "storage.object-store": "ADR-0002" },
+        "rules": ["storage.one-bucket-per-app"]
+      }
+    },
+    {
+      "name": "a_superseded_title_finds_the_key_and_the_head_answers_it",
+      "corpus": "relevance-sample",
+      "query": { "text": "garage minio" },
+      "expected": {
+        "order": ["storage.object-store"],
+        "states": { "storage.object-store": "active" },
+        "adrs": { "storage.object-store": "ADR-0002" }
+      },
+      "why": "Only the replaced record says `Garage` or `MinIO`. Retrieval reads it; the answer is still the head's."
+    },
+    {
+      "name": "a_path_a_record_names_is_the_strongest_signal",
+      "corpus": "relevance-sample",
+      "query": { "paths": ["kubernetes/data-storage/ceph/values.yaml"] },
+      "expected": {
+        "order": ["storage.object-store"],
+        "mentions": { "storage.object-store": 1 },
+        "co_changed": { "storage.object-store": 0 }
+      }
+    },
+    {
+      "name": "a_glob_in_a_record_matches_by_its_literal_directory",
+      "corpus": "relevance-sample",
+      "query": { "paths": ["kubernetes/apps/forgejo/values.yaml"] },
+      "expected": {
+        "order": ["storage.object-store", "ci.system"],
+        "mentions": { "storage.object-store": 1, "ci.system": 0 }
+      },
+      "why": "`kubernetes/apps/*/values.yaml` in ADR-0002 covers the path; ci.system ranks below it on the word `forgejo` alone."
+    },
+    {
+      "name": "top_limits_the_rows_without_changing_the_order",
+      "corpus": "relevance-sample",
+      "query": { "paths": ["kubernetes/apps/forgejo/values.yaml"], "top": 1 },
+      "expected": { "order": ["storage.object-store"] }
+    },
+    {
+      "name": "a_key_decided_only_at_a_scope_is_undecided_at_the_default",
+      "corpus": "relevance-sample",
+      "query": { "text": "continuous integration checks" },
+      "expected": {
+        "order": ["ci.system"],
+        "states": { "ci.system": "undecided" },
+        "exits": { "ci.system": 4 },
+        "unresolved": ["ci.system"],
+        "elsewhere": { "ci.system": ["cloud"] }
+      },
+      "why": "Undecided here is true and useless alone, so the ranking names the scope that does decide it — from the graph, not by inference."
+    },
+    {
+      "name": "the_same_key_is_active_at_its_own_scope",
+      "corpus": "relevance-sample",
+      "query": { "text": "continuous integration checks", "scope": "cloud" },
+      "expected": {
+        "order": ["ci.system"],
+        "states": { "ci.system": "active" },
+        "exits": { "ci.system": 0 },
+        "adrs": { "ci.system": "ADR-0003" },
+        "unresolved": []
+      }
+    },
+    {
+      "name": "an_undecided_key_is_named_rather_than_invented",
+      "corpus": "relevance-sample",
+      "query": { "text": "api gateway" },
+      "expected": {
+        "order": ["api.gateway"],
+        "states": { "api.gateway": "undecided" },
+        "exits": { "api.gateway": 4 },
+        "unresolved": ["api.gateway"]
+      },
+      "why": "The key is registered and nothing decided it. A ranking that dropped it would be the moment an agent invents one."
+    },
+    {
+      "name": "a_query_matching_nothing_ranks_nothing",
+      "corpus": "relevance-sample",
+      "query": { "text": "quarterly expiry reversal" },
+      "expected": { "order": [], "rules": [] }
+    },
+    {
+      "name": "a_contradiction_is_reported_and_flagged_unresolved",
+      "corpus": "contradiction",
+      "query": { "text": "api gateway" },
+      "expected": {
+        "order": ["api.gateway"],
+        "states": { "api.gateway": "contradiction" },
+        "exits": { "api.gateway": 5 },
+        "unresolved": ["api.gateway"]
+      },
+      "why": "Exit 5 means stop. A router reads `unresolved`, and a ranking that softened it would be teaching a caller to pick a side."
+    },
+    {
+      "name": "a_retired_key_is_reported_as_retired",
+      "corpus": "homelab-sample",
+      "query": { "text": "dynamic DNS record updater for the WAN address", "top": 3 },
+      "expected": {
+        "order": ["dns.dynamic-record-updater"],
+        "states": { "dns.dynamic-record-updater": "retired" },
+        "exits": { "dns.dynamic-record-updater": 6 },
+        "adrs": { "dns.dynamic-record-updater": "ADR-0015" },
+        "unresolved": []
+      },
+      "why": "Retired is an answer with positive evidence behind it (section 6), so it is not an unresolved dependency."
+    },
+    {
+      "name": "a_scoped_ranking_answers_at_that_scope",
+      "corpus": "homelab-sample",
+      "query": { "text": "object store for S3 buckets", "scope": "homelab", "top": 2 },
+      "expected": {
+        "order": ["storage.object-store", "forge.ssh-key-ownership"],
+        "states": { "storage.object-store": "active", "forge.ssh-key-ownership": "active" },
+        "adrs": { "storage.object-store": "ADR-0021" }
+      },
+      "why": "ADR-0021 replaced ADR-0009 for this scope only, and the ranking answers with the replacement. The second row is the tail a ranking has — scored a quarter of the first — and it is asserted rather than trimmed, because a battery that only pinned the winner would not notice the tail moving."
+    }
+  ]
+}

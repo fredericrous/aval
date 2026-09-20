@@ -4,6 +4,12 @@
 query, and the expected result. The harness rules are in the file's own
 `description` header.
 
+`relevant.json` is the second one, for the ranking `aval relevant` produces.
+It is a separate file because it asserts a different kind of thing: not what is
+true, but what a *suggestion* says about it — that the order is reproducible
+byte for byte, and that the verdict beside each ranked key is the resolver's
+own, `undecided` and `contradiction` included. Its rules are in its own header.
+
 ## The corpora
 
 | Corpus | Exercises |
@@ -13,6 +19,7 @@ query, and the expected result. The harness rules are in the file's own
 | `contradiction` | the same corpus without the reconciliation, so competing heads are observable |
 | `retire-scoped` | a scope opting out of an inherited default |
 | `rules-sample` | rules: two constraints and a heuristic under a live record, one under a draft, one under a replaced record — so every reason a rule can be inactive has an instance |
+| `relevance-sample` | relevance: a replaced record whose title still says what the key is about, a record naming a literal path and a glob, a key decided only at a scope, a key declared and undecided, and a rule to rank beside them |
 
 `homelab-sample` is converted from `homelab/docs/adr`. The frontmatter is a
 faithful conversion of what each ADR decides; the bodies are stubs, because this

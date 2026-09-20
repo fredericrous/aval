@@ -232,6 +232,7 @@ fn every_corpus_heads_file_matches_the_projection() {
         "retire-scoped",
         "scoped-keys",
         "rules-sample",
+        "relevance-sample",
     ];
     for name in corpora {
         let l = loaded(name);
@@ -297,6 +298,248 @@ fn an_edit_to_a_formatted_projection_is_still_stale() {
             aval_core::project::canonicalise(&edit),
             canonical,
             "a content change must not read as current"
+        );
+    }
+}
+
+// --- the relevance battery -------------------------------------------------
+//
+// A second fixture file, driven the same way and asserting two things the
+// resolve battery cannot reach: that a ranking is reproducible, and that the
+// verdict beside a ranked key is the resolver's own (SEMANTICS section 5.1).
+
+fn relevance_battery() -> Json {
+    let p = conformance_dir().join("relevant.json");
+    let src = std::fs::read_to_string(&p).expect("read relevant.json");
+    json::parse(&src).expect("relevant.json parses")
+}
+
+/// Every field a case may assert. An unknown one throws, for the reason an
+/// unknown `query.command` does: a fixture nobody reads is a fixture that
+/// passes green while asserting nothing.
+const RELEVANCE_FIELDS: &[&str] = &[
+    "order",
+    "states",
+    "exits",
+    "adrs",
+    "unresolved",
+    "mentions",
+    "co_changed",
+    "elsewhere",
+    "rules",
+];
+
+fn query_of(q: &Json) -> aval::relevant::Query {
+    aval::relevant::Query {
+        paths: q
+            .get("paths")
+            .and_then(|p| p.as_arr())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        text: want_str(q, "text").map(str::to_string),
+        changed: false,
+        top: q
+            .get("top")
+            .and_then(|t| t.as_i64())
+            .unwrap_or(aval::relevant::DEFAULT_TOP as i64) as usize,
+        scope: want_str(q, "scope").unwrap_or(DEFAULT_SCOPE).to_string(),
+    }
+}
+
+fn keys_of(payload: &Json) -> &[Json] {
+    payload
+        .get("keys")
+        .and_then(|k| k.as_arr())
+        .expect("payload.keys")
+}
+
+fn row<'a>(payload: &'a Json, key: &str) -> &'a Json {
+    keys_of(payload)
+        .iter()
+        .find(|r| r.get("key").and_then(|k| k.as_str()) == Some(key))
+        .unwrap_or_else(|| panic!("`{}` is not in the ranking: {}", key, payload))
+}
+
+fn pairs(exp: &Json, field: &str) -> Vec<(String, Json)> {
+    match exp.get(field) {
+        Some(Json::Obj(m)) => m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        None => Vec::new(),
+        other => panic!("`{}` must be an object, found {:?}", field, other),
+    }
+}
+
+fn run_relevance(case: &str, l: &Loaded, q: &Json, exp: &Json) {
+    if let Json::Obj(m) = exp {
+        for k in m.keys() {
+            assert!(
+                RELEVANCE_FIELDS.contains(&k.as_str()),
+                "{}: unknown expectation `{}`",
+                case,
+                k
+            );
+        }
+    }
+    let query = query_of(q);
+    let reply = aval::relevant::relevant_in(l, &query);
+    assert_eq!(reply.exit, 0, "{}: a ranking always exits 0", case);
+    assert!(!reply.is_error, "{}: a ranking is never an error", case);
+    let p = &reply.json;
+
+    // Reproducible, byte for byte, over the same corpus and the same query.
+    let again = aval::relevant::relevant_in(l, &query);
+    assert_eq!(
+        p.to_string(),
+        again.json.to_string(),
+        "{}: two rankings of one corpus differ",
+        case
+    );
+    assert_eq!(
+        reply.text, again.text,
+        "{}: the text rendering differs",
+        case
+    );
+
+    if let Some(order) = exp.get("order").and_then(|o| o.as_arr()) {
+        let want: Vec<&str> = order.iter().filter_map(|x| x.as_str()).collect();
+        let got: Vec<&str> = keys_of(p)
+            .iter()
+            .filter_map(|r| r.get("key").and_then(|k| k.as_str()))
+            .collect();
+        assert_eq!(got, want, "{}: ranked order", case);
+        // The compact routing list is the same keys in the same order.
+        let deps: Vec<&str> = p
+            .get("dependencies")
+            .and_then(|d| d.as_arr())
+            .expect("dependencies")
+            .iter()
+            .filter_map(|d| d.get("key").and_then(|k| k.as_str()))
+            .collect();
+        assert_eq!(deps, want, "{}: dependencies", case);
+    }
+    for (key, want) in pairs(exp, "states") {
+        assert_eq!(
+            row(p, &key).get("state").and_then(|s| s.as_str()),
+            want.as_str(),
+            "{}: state of {}",
+            case,
+            key
+        );
+    }
+    for (key, want) in pairs(exp, "exits") {
+        assert_eq!(
+            row(p, &key).get("exit").and_then(|e| e.as_i64()),
+            want.as_i64(),
+            "{}: exit of {}",
+            case,
+            key
+        );
+    }
+    for (key, want) in pairs(exp, "adrs") {
+        assert_eq!(
+            row(p, &key).get("adr").and_then(|a| a.as_str()),
+            want.as_str(),
+            "{}: adr of {}",
+            case,
+            key
+        );
+    }
+    // How many of the caller's paths each path signal actually matched. A
+    // count rather than the list: which path matched is the same fact, and a
+    // fixture asserting the list would pin the order a caller passed them in.
+    for field in ["mentions", "co_changed"] {
+        for (key, want) in pairs(exp, field) {
+            let n = row(p, &key)
+                .get("why")
+                .and_then(|w| w.get(field))
+                .and_then(|m| m.as_arr())
+                .map(<[Json]>::len)
+                .unwrap_or(0);
+            assert_eq!(
+                n as i64,
+                want.as_i64().expect("a count"),
+                "{}: {} of {}",
+                case,
+                field,
+                key
+            );
+        }
+    }
+    for (key, want) in pairs(exp, "elsewhere") {
+        let scopes: Vec<&str> = row(p, &key)
+            .get("why")
+            .and_then(|w| w.get("decided_elsewhere"))
+            .and_then(|e| e.as_arr())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.get("scope").and_then(|s| s.as_str()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let want: Vec<&str> = want
+            .as_arr()
+            .expect("a list")
+            .iter()
+            .filter_map(|x| x.as_str())
+            .collect();
+        assert_eq!(scopes, want, "{}: where else {} is decided", case, key);
+    }
+    if let Some(rules) = exp.get("rules").and_then(|r| r.as_arr()) {
+        let want: Vec<&str> = rules.iter().filter_map(|x| x.as_str()).collect();
+        let got: Vec<&str> = p
+            .get("rules")
+            .and_then(|r| r.as_arr())
+            .expect("rules")
+            .iter()
+            .filter_map(|r| r.get("id").and_then(|i| i.as_str()))
+            .collect();
+        assert_eq!(got, want, "{}: ranked rules", case);
+    }
+    // Whatever else it says, it says what it is.
+    assert_eq!(
+        p.get("kind").and_then(|k| k.as_str()),
+        Some("suggestion"),
+        "{}: a ranking declares itself a suggestion",
+        case
+    );
+}
+
+#[test]
+fn the_relevance_battery_is_non_trivial() {
+    let b = relevance_battery();
+    let n = b
+        .get("cases")
+        .and_then(|c| c.as_arr())
+        .map_or(0, |c| c.len());
+    let min = b.get("min_cases").and_then(|m| m.as_i64()).unwrap_or(0) as usize;
+    assert!(min > 0, "relevant.json must declare min_cases");
+    assert!(
+        n >= min,
+        "battery has {} cases, fewer than the declared minimum {}",
+        n,
+        min
+    );
+}
+
+#[test]
+fn every_relevance_case_holds() {
+    let b = relevance_battery();
+    let cases = b.get("cases").and_then(|c| c.as_arr()).expect("cases");
+    let mut seen: Vec<&str> = Vec::new();
+    for c in cases {
+        let name = want_str(c, "name").expect("case.name");
+        assert!(!seen.contains(&name), "duplicate case name `{}`", name);
+        seen.push(name);
+        let l = loaded(want_str(c, "corpus").expect("case.corpus"));
+        run_relevance(
+            name,
+            &l,
+            c.get("query").expect("case.query"),
+            c.get("expected").expect("case.expected"),
         );
     }
 }
