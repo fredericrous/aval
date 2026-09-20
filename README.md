@@ -59,6 +59,77 @@ that is where an agent left to its own judgment does damage.
 | 6 | `retired` | an ADR deliberately retired this key |
 | 7 | `unknown` | no such key or scope, or a key not decided on that axis |
 
+## Which decisions bear on this change
+
+`resolve` needs a key, which is a chicken-and-egg problem at the start of a
+task: the way to learn that a decision governs the file you are about to edit
+is to already know its name. The alternative is `HEADS.md`, which is every
+decision the repository has ever made.
+
+`aval relevant` ranks the vocabulary against what you are about to touch:
+
+```console
+$ aval relevant --path crates/aval/src/mcp.rs --text "release a new version by pushing a tag"
+advisory   A ranking is a suggestion: it resolves nothing. Only `aval resolve <key>` answers.
+
+   14.2104  release.trigger         active          ADR-0008   A pushed version tag, never a merge
+   11.5524  release.version-scheme  active          ADR-0012   Semantic Versioning 2.0.0
+    4.9182  ci.test-gate-stage      active          ADR-0009   pre-commit
+    4.7105  forge.primary           undecided       no accepted decision for forge.primary
+```
+
+**This is retrieval, not resolution**, and the output says so on every run. The
+order is a guess about attention. What is not a guess is the verdict on each
+row: it comes from the same `resolve` the rest of the tool runs, which is what
+makes the `undecided` row the interesting one — nobody decided it, and an agent
+that quietly fills the gap is doing the thing the corpus exists to prevent.
+
+### The signals
+
+| Signal | Weight | What it reads |
+|---|---|---|
+| text | 1.0 | BM25 over `--text`, against one document per key: the key's name and description, then the title, choice, reason and body of whatever decides it, and superseded titles at a third of the weight |
+| path | 0.6 | the same BM25 over the words in each `--path` — directories and file stems, extensions dropped |
+| mention | 2.0 per path, three at most | a record's body names that path itself: backticked, as a markdown link, or as a glob matched by its literal directory |
+| co-change | 0.5 per path, three at most | `git log` says the commits that wrote the record also touched that path |
+
+A mention outranks any amount of word overlap, because it is the one signal an
+author put there on purpose. Co-change is weakest and capped hardest: a record
+and a config file in one commit may share nothing but a Tuesday. The tokenizer
+is frozen — lowercase, ASCII-fold, split on every non-alphanumeric, drop stop
+words and one-character tokens, light suffix stemming — and the conformance
+battery compares the resulting order byte for byte, so changing it is a change
+somebody reviews rather than a ranking that quietly moved.
+
+`--changed` adds what git reports modified, staged and untracked, which is the
+whole query for "what does this branch touch". `--scope S` ranks only the keys
+answerable at S and resolves each one there. `--top N` defaults to 5, and a row
+must also score a fifth of the top row to be printed, so a query with one good
+answer reports one. Rules (below) that match the same words are listed after
+the keys, clearly apart.
+
+Exit is **always 0**, usage errors aside. A ranking has no verdict to report,
+and "I ranked and found little" must not share a code with "I could not look".
+
+### For a router
+
+`--json` carries a `dependencies` array — the same keys, compacted:
+
+```json
+{"dependencies":[
+  {"key":"release.trigger","state":"active","exit":0,"adr":"ADR-0008","unresolved":false},
+  {"key":"forge.primary","state":"undecided","exit":4,"unresolved":true}]}
+```
+
+One row per ranked key, in ranked order, and `unresolved` is true for exactly
+`undecided` and `contradiction`. That is what a dispatcher reads —
+[relais](https://github.com/fredericrous/relais) routes on unresolved decision
+dependencies — so a change whose decisions are not settled goes to a person
+instead of to a worker. The full verdict, with the choice and the reason, is in
+`keys`; `why` on each row says which signal earned it its place, and
+`decided_elsewhere` names the scopes that do decide a key the asked scope does
+not.
+
 ## In front of an agent
 
 A corpus that resolves is half the point. The other half is that whatever is
@@ -120,9 +191,15 @@ a session:
 $ claude mcp add aval -- aval mcp
 ```
 
-Five read-only tools: `aval_resolve`, `aval_keys`, `aval_heads`, `aval_show`,
-`aval_history`. They resolve through the same graph the CLI does and return the
+Nine read-only tools: `aval_resolve`, `aval_relevant`, `aval_keys`,
+`aval_heads`, `aval_show`, `aval_history`, `aval_rules`, `aval_rule` and
+`aval_repos`. They resolve through the same graph the CLI does and return the
 same bytes `--json` would, so the two surfaces cannot drift apart.
+
+`aval_relevant` is the one whose result is **not** an answer, and its
+description says so where a model will read it: the ranking is advisory, what
+is authoritative is the verdict beside each key, and an `undecided` row is the
+reason to have called it.
 
 The distinction that matters: **a verdict is not an error**. `undecided`,
 `retired`, `unknown` and `contradiction` all come back as ordinary results with
@@ -179,6 +256,7 @@ different edges:
 | | |
 |---|---|
 | `aval resolve <key> [--scope S]` | the authoritative lookup |
+| `aval relevant [--path P]… [--text W] [--changed] [--top N]` | which keys bear on what you are about to touch, ranked, each with its verdict. Advisory: it resolves nothing |
 | `aval check` | every invariant; what the git hook and CI run |
 | `aval heads [--write\|--check]` | the projection |
 | `aval show ADR-0015` | derived status, including partial supersession |

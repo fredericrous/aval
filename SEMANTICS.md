@@ -752,6 +752,51 @@ nothing accepted has ever occupied the slot.
 `resolve` reports which slot answered, so a caller can tell a scope-specific
 answer from an inherited default.
 
+### 5.1 Relevance is a suggestion
+
+`resolve` is exact: a caller must know a key's name before it can ask anything
+(§12.1). That is the right shape for an answer and no shape at all for a
+starting point — an agent about to edit a file cannot discover that three keys
+govern it and a fourth is deliberately undecided.
+
+**Relevance** closes that gap at the input edge, and nowhere else:
+
+```
+relevant(signals, scope) → an ORDERED list of keys,
+                           each carrying resolve(key, scope)
+```
+
+It is a **`suggestion`**, the class §5's did-you-mean already defines, and the
+same obligations hold:
+
+- **A ranking resolves nothing.** A caller MUST call `resolve` on the exact key
+  before acting on it, and MUST NOT act on a key's position, its score, or its
+  presence in the list. An implementation MUST state this in every rendering it
+  produces, and a tool surface MUST state it in the tool description (§14.1).
+- **The verdict beside a ranked key is the resolver's, unmodified.** Including
+  `undecided` and `contradiction`: an implementation MUST NOT drop, soften or
+  re-rank a key because of its verdict. Reporting them is the point — an
+  undecided key is where an agent invents an answer, and a contradiction is
+  where it picks a side.
+- **A ranking writes nothing**, exactly as the rest of the read surface does.
+- **The ranking is not part of what the corpus says is true.** Two
+  implementations may order the same corpus differently and both conform. What
+  each MUST do is be deterministic over a corpus and a query (§12): no clock,
+  no network, no training, no state carried between calls. A ranking that is
+  reproducible can be reviewed, pinned by a fixture, and argued with.
+- **Absence from a ranking is not evidence.** A key that did not rank is not
+  thereby inapplicable, and MUST NOT be cited as permission to proceed. Only a
+  verdict says anything about a key, and `undecided` is the verdict that says
+  nothing was decided.
+- **Signals and weights are implementation detail.** They are documented
+  because a ranking nobody can predict is a ranking nobody can correct, not
+  because a conforming implementation must use the same ones. What is pinned is
+  the contract above and the field names of the payload (§15).
+
+The exit code is `0` whatever the ranking contains. A ranking has no verdict to
+report, so a thin one is not a failure — and §14's rule runs the other way too:
+"I ranked and found little" must not share a range with "I could not look".
+
 ---
 
 ## 6. Retirement
@@ -1058,8 +1103,15 @@ so §9's guarantee holds: there is no state `--write` cannot repair.
 
 - **Scopes do not nest.** The estate has four sibling clusters. Nesting would
   require a precedence rule between partial matches and buys nothing today.
-- **No semantic search.** Discovery by similarity is useful and is not
-  authority. Only an exact key resolves.
+- **No similarity in the resolver.** Discovery by similarity is useful and is
+  not authority, so it lives at the **input edge** and only there: the
+  did-you-mean on exit 7 (§5) and the ranking `relevant` produces (§5.1). Both
+  are `suggestion`s that resolve nothing. Only an exact key resolves, and no
+  amount of similarity promotes a suggestion into an answer.
+- **No embeddings, no model, no index on disk.** Relevance is computed from the
+  corpus in front of it, on every call. An index that persisted would be state
+  that can disagree with the tree, which is the failure §14.1 refuses for the
+  graph and refuses here for the same reason.
 - **No drift detection, waivers, or expiry.** application-landscape owns those.
   Duplicating them here would fork the metamodel its federation ADR exists to
   protect.
@@ -1109,6 +1161,7 @@ Low codes follow the duro CLI. Verdicts start at 4.
 |---|---|---|
 | `aval check` | A + B + C | `0` clean · `1` findings · `2` usage · `3` unreadable |
 | `aval resolve` | A then B | the full table above |
+| `aval relevant` | A, then B per ranked key | `0` always, whatever it ranks · `2` usage, including a `--scope` the corpus does not declare · `3` unreadable |
 | `aval heads --write` | A | `0` · `1` write failed · `2` · `3` |
 | `aval heads --check` | A + C | `0` fresh · `1` stale · `2` · `3` |
 | `aval show` | A | `0` · `2` · `3` · `7` |
@@ -1248,6 +1301,18 @@ caller that does not know it is weighing an adopted rule against a remembered
 book, and the book is what it will pick. `aval_rule` needs `repo` in a
 workspace because rule ids are corpus-local, as record ids are; `aval_rules`
 needs it for the size reason below.
+
+`aval_relevant` is the retrieval tool (§5.1), and its description carries the
+heaviest obligation on the surface: it is the one tool whose result is **not**
+an answer. A model reading a ranked list will treat the first row as the answer
+unless told otherwise, so the description MUST say that the ranking resolves
+nothing, that what is authoritative is the verdict beside each key, and that an
+`undecided` or `contradiction` row is the reason to call it rather than a
+defect in it. Its `dependencies` array is the same rows compacted for a router,
+each flagged `unresolved` when its verdict is `undecided` or `contradiction`.
+It needs `repo` in a workspace: paths belong to one repository, and a
+similarity score computed against one corpus's documents is not comparable with
+another's, so there is no map to hand back.
 
 `aval_keys` and `aval_heads` need `repo` too, for a different reason. A tool
 result is paid for in context, every repository's heads at once is tens of
