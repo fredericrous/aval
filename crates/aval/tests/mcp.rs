@@ -259,7 +259,7 @@ fn an_unreadable_corpus_is_reported_and_does_not_stop_the_server() {
     let tools = result(&replies[0]).get("tools").and_then(|t| t.as_arr());
     assert_eq!(
         tools.map(<[Json]>::len),
-        Some(8),
+        Some(9),
         "tools/list must still answer"
     );
 
@@ -571,7 +571,7 @@ fn every_tool_is_declared_read_only() {
         .get("tools")
         .and_then(|t| t.as_arr())
         .expect("tools");
-    assert_eq!(tools.len(), 8);
+    assert_eq!(tools.len(), 9);
     for t in tools {
         let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("");
         assert!(name.starts_with("aval_"), "{} needs the prefix", name);
@@ -1612,4 +1612,178 @@ fn discovery_is_fresh_per_call() {
     let again = ask(&mut s, 5);
     assert_eq!(repo_names(tool_result(&again).0), ["alpha", "beta"]);
     assert!(s.finish().is_empty());
+}
+
+// --- aval_relevant ---------------------------------------------------------
+//
+// The tool that resolves nothing. Everything below is about keeping it that
+// way: it answers with verdicts it did not compute itself, it is never an
+// error for finding little, and it is byte-equal to the CLI.
+
+/// A corpus where one key is decided and one is deliberately not, so a ranking
+/// has both an answer and a silence to report.
+fn rankable(name: &str) -> PathBuf {
+    let r = scratch(name);
+    write(
+        &r,
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [cloud]\nkeys:\n  storage.object-store:\n    \
+         description: Canonical S3-compatible object store\n  api.gateway:\n",
+    );
+    write(
+        &r,
+        "docs/adr/0001-object-store.md",
+        "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  \
+         - key: storage.object-store\n    choice: Ceph RGW\n    first: true\n\
+         ---\n# 0001 — Ceph RGW for object storage\n\nIt serves \
+         `kubernetes/data-storage/ceph`.\n",
+    );
+    r
+}
+
+#[test]
+fn a_ranking_is_a_suggestion_and_never_an_error() {
+    let r = rankable("relevant-basic");
+    let replies = exchange(
+        &r,
+        &[&call(
+            "aval_relevant",
+            r#"{"text":"where do objects get stored","top":3}"#,
+        )],
+    );
+    let (p, is_err) = tool_result(&replies[0]);
+    assert!(!is_err, "a ranking is never a failure: {}", p);
+    assert_eq!(p.get("kind").and_then(|k| k.as_str()), Some("suggestion"));
+    assert_eq!(p.get("advisory"), Some(&Json::Bool(true)));
+    let keys = p.get("keys").and_then(|k| k.as_arr()).expect("keys");
+    assert_eq!(
+        keys[0].get("key").and_then(|k| k.as_str()),
+        Some("storage.object-store"),
+        "{}",
+        p
+    );
+    // The verdict beside a ranked key is the resolver's, not the ranker's.
+    assert_eq!(state(&keys[0]), "active");
+    assert_eq!(
+        keys[0].get("adr").and_then(|a| a.as_str()),
+        Some("ADR-0001")
+    );
+}
+
+#[test]
+fn an_undecided_key_is_reported_as_an_unresolved_dependency() {
+    let r = rankable("relevant-undecided");
+    let replies = exchange(
+        &r,
+        &[&call("aval_relevant", r#"{"text":"api gateway routing"}"#)],
+    );
+    let (p, _) = tool_result(&replies[0]);
+    let deps = p
+        .get("dependencies")
+        .and_then(|d| d.as_arr())
+        .expect("dependencies");
+    let gateway = deps
+        .iter()
+        .find(|d| d.get("key").and_then(|k| k.as_str()) == Some("api.gateway"))
+        .unwrap_or_else(|| panic!("api.gateway is missing: {}", p));
+    assert_eq!(state(gateway), "undecided");
+    assert_eq!(gateway.get("exit").and_then(|e| e.as_i64()), Some(4));
+    assert_eq!(gateway.get("unresolved"), Some(&Json::Bool(true)));
+}
+
+#[test]
+fn a_contradiction_is_flagged_unresolved_too() {
+    let c = conflicted("relevant-contradiction");
+    let replies = exchange(&c, &[&call("aval_relevant", r#"{"text":"one two"}"#)])[0].clone();
+    let (p, is_err) = tool_result(&replies);
+    assert!(!is_err, "{}", p);
+    let deps = p
+        .get("dependencies")
+        .and_then(|d| d.as_arr())
+        .expect("deps");
+    assert_eq!(state(&deps[0]), "contradiction");
+    assert_eq!(deps[0].get("exit").and_then(|e| e.as_i64()), Some(5));
+    assert_eq!(deps[0].get("unresolved"), Some(&Json::Bool(true)));
+}
+
+#[test]
+fn the_ranking_matches_the_cli_byte_for_byte() {
+    let r = rankable("relevant-parity");
+    let reply = &exchange(
+        &r,
+        &[&call(
+            "aval_relevant",
+            r#"{"text":"object storage","paths":["kubernetes/data-storage/ceph"],"top":2}"#,
+        )],
+    )[0];
+    assert_eq!(
+        content(reply, 0).trim(),
+        cli(
+            &r,
+            &[
+                "relevant",
+                "--text",
+                "object storage",
+                "--path",
+                "kubernetes/data-storage/ceph",
+                "--top",
+                "2",
+                "--json",
+            ],
+        )
+        .trim()
+    );
+}
+
+#[test]
+fn a_call_with_no_query_is_a_protocol_error() {
+    let r = rankable("relevant-empty");
+    // Malformed, not thin: a ranking with nothing to rank against would hand
+    // back the corpus in an arbitrary order with a score column.
+    assert_eq!(
+        err_code(&exchange(&r, &[&call("aval_relevant", "{}")])[0]),
+        -32602
+    );
+    assert_eq!(
+        err_code(&exchange(&r, &[&call("aval_relevant", r#"{"paths":"a/b"}"#)])[0]),
+        -32602
+    );
+    assert_eq!(
+        err_code(&exchange(&r, &[&call("aval_relevant", r#"{"text":"x","top":0}"#)])[0]),
+        -32602
+    );
+}
+
+#[test]
+fn relevant_needs_a_repo_in_a_workspace() {
+    let ws = workspace("relevant-workspace");
+    let reply = &exchange(&ws, &[&call("aval_relevant", r#"{"text":"one"}"#)])[0];
+    assert_eq!(err_code(reply), -32602);
+    let named = &exchange(
+        &ws,
+        &[&call("aval_relevant", r#"{"text":"one","repo":"alpha"}"#)],
+    )[0];
+    let (p, is_err) = tool_result(named);
+    assert!(!is_err, "{}", p);
+    assert_eq!(p.get("kind").and_then(|k| k.as_str()), Some("suggestion"));
+}
+
+#[test]
+fn the_tool_description_says_it_resolves_nothing() {
+    // SEMANTICS section 14.1: a tool surface is where a caller learns the
+    // obligations, so omitting one silently removes it.
+    let r = rankable("relevant-description");
+    let replies = exchange(&r, &[r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#]);
+    let tools = result(&replies[0])
+        .get("tools")
+        .and_then(|t| t.as_arr())
+        .expect("tools");
+    let t = tools
+        .iter()
+        .find(|t| t.get("name").and_then(|n| n.as_str()) == Some("aval_relevant"))
+        .expect("aval_relevant is listed");
+    let d = t.get("description").and_then(|d| d.as_str()).unwrap_or("");
+    assert!(d.contains("ADVISORY"), "{}", d);
+    assert!(d.contains("RESOLVES NOTHING"), "{}", d);
+    assert!(d.contains("aval_resolve"), "{}", d);
 }

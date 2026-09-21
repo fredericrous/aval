@@ -25,6 +25,7 @@
 //! caller can see why.
 
 use crate::load;
+use crate::relevant;
 use crate::render;
 use aval_core::json::Json;
 use aval_core::model::DEFAULT_SCOPE;
@@ -246,6 +247,73 @@ fn tools() -> Vec<Json> {
                     repo.clone(),
                 ],
                 vec!["key"],
+            ),
+        ),
+        tool(
+            "aval_relevant",
+            "Which decision keys bear on what you are about to touch, ranked from \
+             the paths and a description of the task.\n\n\
+             ADVISORY, AND IT RESOLVES NOTHING. This is retrieval, not a verdict: \
+             the ranking is a `suggestion` in the sense the instructions give that \
+             word, it is not part of what the corpus says is true, and a key's \
+             position in it means nothing about the key. What IS authoritative is \
+             the verdict reported beside each key, which comes from aval_resolve \
+             against the exact key — so read `state`, not the order.\n\n\
+             Call it FIRST, at the start of a task, then call aval_resolve for \
+             each key you are about to act on. An `undecided` or `contradiction` \
+             row is the point of this tool: undecided means nobody has decided it, \
+             so do not invent an answer, and contradiction means STOP. \
+             `dependencies` is the same list compacted for a router, each row \
+             flagged `unresolved`.\n\n\
+             Signals, all local and deterministic: the words of the task, the \
+             words of the paths, a record whose body names one of the paths, and \
+             what git says changed alongside the record. Nothing is trained and \
+             nothing leaves the machine. In a workspace `repo` is required: paths \
+             belong to one repository.",
+            schema(
+                vec![
+                    (
+                        "paths",
+                        Json::obj()
+                            .set("type", "array")
+                            .set("items", Json::obj().set("type", "string"))
+                            .set(
+                                "description",
+                                "Repository-relative files or directories about to \
+                                 be touched, e.g. `crates/aval/src/mcp.rs`.",
+                            ),
+                    ),
+                    (
+                        "text",
+                        prop(
+                            "string",
+                            "The task in words, e.g. `add a SQL query to the app \
+                             server`. Prose, not a key.",
+                        ),
+                    ),
+                    (
+                        "changed",
+                        prop(
+                            "boolean",
+                            "Also rank against what git reports modified, staged or \
+                             untracked in the working tree. Read-only. Default false.",
+                        ),
+                    ),
+                    (
+                        "top",
+                        prop("number", "How many keys and rules to report. Default 5."),
+                    ),
+                    (
+                        "scope",
+                        prop(
+                            "string",
+                            "Resolve each ranked key at this scope, and rank only \
+                             the keys answerable there. Omit for the default scope.",
+                        ),
+                    ),
+                    repo.clone(),
+                ],
+                vec![],
             ),
         ),
         tool(
@@ -624,6 +692,7 @@ impl Out {
 /// not have to guess which of the two it got.
 enum Ask<'a> {
     Resolve { key: &'a str, scope: &'a str },
+    Relevant(relevant::Query),
     Keys(render::Detail),
     Heads,
     Show(&'a str),
@@ -636,6 +705,7 @@ impl Ask<'_> {
     fn run(&self, l: &load::Loaded) -> render::Reply {
         match self {
             Ask::Resolve { key, scope } => render::resolve_in(l, key, scope),
+            Ask::Relevant(q) => relevant::relevant_in(l, q),
             Ask::Keys(d) => render::keys_in(l, *d),
             Ask::Heads => render::heads_in(l),
             Ask::Show(id) => render::show_in(l, id),
@@ -706,6 +776,10 @@ fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
                 key,
                 scope: opt_str(args, "scope").unwrap_or(DEFAULT_SCOPE),
             },
+            Err(e) => return error(id, INVALID_PARAMS, &e),
+        },
+        "aval_relevant" => match relevant_args(args) {
+            Ok(q) => Ask::Relevant(q),
             Err(e) => return error(id, INVALID_PARAMS, &e),
         },
         "aval_keys" => {
@@ -824,6 +898,10 @@ fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
                 // size argument, the same one heads and keys make.
                 Ask::Rule(_) => Some("aval_rule"),
                 Ask::Rules(_) => Some("aval_rules"),
+                // Paths belong to one repository, and a BM25 score is computed
+                // against one document collection: two corpora's rankings are
+                // not comparable numbers, so there is no map to hand back.
+                Ask::Relevant(_) => Some("aval_relevant"),
                 Ask::Resolve { .. } | Ask::History { .. } => None,
             };
             if let Some(tool) = needs_one {
@@ -882,6 +960,64 @@ fn req_str<'a>(args: Option<&'a Json>, name: &str) -> Result<&'a str, String> {
 
 fn opt_str<'a>(args: Option<&'a Json>, name: &str) -> Option<&'a str> {
     args.and_then(|a| a.get(name)).and_then(|v| v.as_str())
+}
+
+/// `aval_relevant`'s arguments, checked before anything is loaded.
+///
+/// Every one is optional and at least one must be there: a ranking with no
+/// query would hand back the corpus in an arbitrary order with a score column,
+/// which reads as a recommendation and is not one. Wrong types are refused
+/// rather than ignored, for the reason `all` is in `aval_rules`: a `paths`
+/// that was silently dropped answers a question nobody asked.
+fn relevant_args(args: Option<&Json>) -> Result<relevant::Query, String> {
+    let mut q = relevant::Query {
+        top: relevant::DEFAULT_TOP,
+        scope: DEFAULT_SCOPE.to_string(),
+        ..relevant::Query::default()
+    };
+    match args.and_then(|a| a.get("paths")) {
+        None | Some(Json::Null) => {}
+        Some(Json::Arr(items)) => {
+            for it in items {
+                match it {
+                    Json::Str(s) if !s.is_empty() => q.paths.push(s.clone()),
+                    _ => return Err("`paths` must hold non-empty strings".into()),
+                }
+            }
+        }
+        Some(_) => return Err("`paths` must be an array of strings".into()),
+    }
+    match args.and_then(|a| a.get("text")) {
+        None | Some(Json::Null) => {}
+        Some(Json::Str(s)) => q.text = Some(s.clone()),
+        Some(_) => return Err("`text` must be a string".into()),
+    }
+    match args.and_then(|a| a.get("changed")) {
+        None | Some(Json::Null) => {}
+        Some(Json::Bool(b)) => q.changed = *b,
+        Some(_) => return Err("`changed` must be a boolean".into()),
+    }
+    match args.and_then(|a| a.get("top")) {
+        None | Some(Json::Null) => {}
+        Some(n) => {
+            let n = n
+                .as_i64()
+                .filter(|n| *n > 0)
+                .ok_or("`top` must be a whole number above zero")?;
+            q.top = n as usize;
+        }
+    }
+    match args.and_then(|a| a.get("scope")) {
+        None | Some(Json::Null) => {}
+        Some(Json::Str(s)) if !s.is_empty() => q.scope = s.clone(),
+        Some(_) => return Err("`scope` must be a non-empty string".into()),
+    }
+    if q.is_empty() {
+        return Err(
+            "`aval_relevant` needs something to rank against: `paths`, `text` or `changed`".into(),
+        );
+    }
+    Ok(q)
 }
 
 /// `repo`, when present, must be a non-empty string.

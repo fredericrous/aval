@@ -1,0 +1,19 @@
+# A corpus for the relevance battery: every signal has an instance, and every
+# verdict a ranking can report is reachable.
+#
+# Paths named in the records below (`kubernetes/…`) deliberately do not exist
+# in the repository this fixture lives in. That is load-bearing: the co-change
+# signal reads `git log`, so a fixture path that existed here would make a
+# ranking depend on this repository's own history and stop being reproducible
+# from a shallow clone.
+dir: docs/adr
+rules:
+  - docs/principles/storage.md
+scopes: [cloud]
+keys:
+  storage.object-store:
+    description: Canonical S3-compatible object store
+  api.gateway:
+    description: Standard API gateway
+  ci.system:
+    description: Which continuous-integration system runs a repository's checks

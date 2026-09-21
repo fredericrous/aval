@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`aval relevant` — which decisions bear on what you are about to touch.**
+  `resolve` is exact, so a caller has to know a key's name before it can ask
+  anything, and at the start of a task that is a chicken-and-egg problem: the
+  way to learn that a decision governs a file is to already know the decision.
+  The alternative was `HEADS.md`, which is every decision ever made. This ranks
+  the vocabulary against `--path` (repeatable), `--text`, and `--changed` —
+  what git reports modified, staged and untracked — and reports each ranked key
+  **with its verdict**, from the same `resolve` everything else uses. So an
+  `undecided` row says nobody decided it, which is the row that matters: it is
+  where an agent left to itself invents an answer.
+
+  Four signals, documented and weighted: BM25 over the query's words (1.0) and
+  over the paths' own words (0.6), a record whose body names one of the paths —
+  backticked, as a link, or as a glob (2.0 each, three at most), and what git
+  says changed alongside the record (0.5 each, three at most). The tokenizer is
+  frozen and the conformance battery compares the resulting order byte for
+  byte. Nothing is trained, nothing is cached, nothing leaves the machine.
+
+  It is a **`suggestion`** in the sense SEMANTICS §5.1 now defines: it resolves
+  nothing, writes nothing, and is not part of what the corpus says is true. The
+  exit code is always `0` — a ranking has no verdict, and "I found little" must
+  not share a code with "I could not look" — except `2` for usage, including a
+  `--scope` the corpus does not declare.
+- **`--json` carries `dependencies`**, the ranked keys compacted for a router:
+  `key`, `state`, `exit`, `adr` and `unresolved`, the last true for exactly
+  `undecided` and `contradiction`. A dispatcher routes a change whose decisions
+  are not settled to a person rather than to a worker without reading the rest
+  of the payload.
+- **The MCP tool `aval_relevant`**, with the same inputs and the same bytes.
+  Its description carries the obligation the surface makes easy to lose: a
+  model reading a ranked list treats the first row as the answer unless it is
+  told, in the description, that the ranking resolves nothing.
+- **A relevance conformance battery**, `conformance/relevant.json`, over a new
+  `relevance-sample` corpus. It pins the two properties that make a ranking
+  reviewable: the same corpus and query give the same order byte for byte, and
+  a ranked key's `undecided` or `contradiction` verdict is reported as the
+  resolver gives it rather than softened or dropped.
+
+### Changed
+
+- `aval-core` gains `relevance` (a frozen tokenizer and a BM25 index) and
+  `Json: From<f64>`, which writes a non-finite float as `null` rather than a
+  literal no JSON reader accepts. Still no external dependencies.
+
 ## v1.5.0
 
 ### Added
