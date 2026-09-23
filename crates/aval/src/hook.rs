@@ -89,7 +89,7 @@ running=$(aval --version 2>/dev/null | sed 's/^aval //')
 if [ -n "$writer" ] && [ -n "$running" ] && [ "$writer" != "$running" ]; then
   oldest=$(printf '%s\n%s\n' "$writer" "$running" | sort -t. -k1,1n -k2,2n -k3,3n | head -n 1)
   if [ "$oldest" = "$running" ]; then
-    printf 'AVAL %s IS OLDER THAN THIS HOOK (written by %s): run `brew upgrade aval`.\nDecisions below may be missing until you do.\n\n' "$running" "$writer"
+    printf 'AVAL %s IS OLDER THAN THIS HOOK (written by %s). Upgrade it: brew upgrade aval,\nor re-run its install script. Decisions below may be missing until you do.\n\n' "$running" "$writer"
   fi
 fi
 
@@ -99,7 +99,7 @@ fi
 heads=$(aval heads 2>/dev/null)
 rc=$?
 if [ "$rc" -ne 0 ]; then
-  [ -f .adr.yaml ] && printf 'aval heads could not load this corpus (exit %s); run `aval check`. No decisions are shown.\n' "$rc"
+  [ -f .adr.yaml ] && printf 'aval heads could not load this corpus (exit %s); run: aval check. No decisions are shown.\n' "$rc"
   exit 0
 fi
 [ -n "$heads" ] || exit 0

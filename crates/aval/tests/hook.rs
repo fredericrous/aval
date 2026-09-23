@@ -724,9 +724,38 @@ fn a_corpus_that_will_not_load_gets_one_line_not_silence() {
     assert_eq!(got.code, 0);
     assert!(
         got.out
-            .contains("aval heads could not load this corpus (exit 3); run `aval check`"),
+            .contains("aval heads could not load this corpus (exit 3); run: aval check"),
         "{}",
         got.out
     );
     assert!(!got.out.contains("ARCHITECTURE DECISIONS"), "{}", got.out);
+}
+
+/// Consumers run shellcheck at pre-commit over the generated script, so a
+/// finding there blocks every repository that re-installs the hook. 1.7.0
+/// shipped two SC2016s (backticks inside single quotes); this keeps it clean.
+/// Skipped, loudly, where shellcheck is not installed.
+#[test]
+fn the_generated_script_is_shellcheck_clean() {
+    let Ok(o) = Command::new("shellcheck").arg("--version").output() else {
+        eprintln!("SKIP: shellcheck not installed");
+        return;
+    };
+    if !o.status.success() {
+        eprintln!("SKIP: shellcheck not runnable");
+        return;
+    }
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/hook-tests");
+    fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("shellcheck-me.sh");
+    fs::write(&p, aval::hook::script()).unwrap();
+    let got = Command::new("shellcheck")
+        .arg(&p)
+        .output()
+        .expect("shellcheck");
+    assert!(
+        got.status.success(),
+        "{}",
+        String::from_utf8_lossy(&got.stdout)
+    );
 }
