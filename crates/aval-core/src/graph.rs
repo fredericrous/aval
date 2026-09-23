@@ -196,6 +196,7 @@ impl Graph {
         check_retirements(&corpus, &mut f);
         check_cycles(&corpus, &mut f);
         check_rules(&corpus, &mut f);
+        check_traits(&corpus, &mut f);
         if f.is_empty() {
             Ok(Graph { corpus })
         } else {
@@ -674,6 +675,66 @@ fn check_rules(c: &Corpus, out: &mut Vec<Finding>) {
                 .in_file(r.file.clone()),
             ),
             Some(_) => {}
+        }
+    }
+}
+
+/// Every trait a rule `applies` to, or an area or disclaim names, is in the
+/// vocabulary in force — the registry's own and every pack's (SEMANTICS
+/// section 2.5).
+///
+/// Both checks need a field that did not exist before 1.7.0 to reach anything,
+/// which is what keeps that release minor: a corpus without `applies`, `areas`
+/// or `disclaims` has nothing here to iterate.
+fn check_traits(c: &Corpus, out: &mut Vec<Finding>) {
+    let vocab = c.registry.vocabulary();
+    let hint = |t: &str| {
+        suggest(t, vocab.iter().map(String::as_str))
+            .map(|s| format!("; did you mean `{}`", s))
+            .unwrap_or_default()
+    };
+    for r in &c.rules {
+        // A vendored rule was checked where it was written, against the
+        // vocabulary its own pack carries, which is in `vocab` too.
+        for t in &r.applies {
+            if !vocab.contains(t) {
+                out.push(
+                    a(
+                        "rule-applies-declared",
+                        format!(
+                            "`{}` applies to `{}`, which no `traits:` declares{}",
+                            r.id,
+                            t,
+                            hint(t)
+                        ),
+                    )
+                    .in_file(r.file.clone()),
+                );
+            }
+        }
+    }
+    for (field, list) in [
+        ("areas", &c.registry.areas),
+        ("disclaims", &c.registry.disclaims),
+    ] {
+        for area in list {
+            for t in &area.traits {
+                if !vocab.contains(t) {
+                    out.push(
+                        a(
+                            "areas-declared",
+                            format!(
+                                "`{}` under `{}` names `{}`, which no `traits:` declares{}",
+                                area.glob,
+                                field,
+                                t,
+                                hint(t)
+                            ),
+                        )
+                        .at(".adr.yaml", area.line),
+                    );
+                }
+            }
         }
     }
 }

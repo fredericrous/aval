@@ -345,6 +345,19 @@ fn tools() -> Vec<Json> {
             ),
         ),
         tool(
+            "aval_traits",
+            "What this repository says it is: the trait vocabulary, its `areas` \
+             (which parts have which traits — a command line, a UI), the traits \
+             in force, its `disclaims`, and `omitted`: how many rules aval_rules \
+             leaves out by default because they are about traits the areas do \
+             not name.\n\n\
+             A DECLARATION, reviewed like any other; detection (`aval traits \
+             --detect` on the CLI) only proposes one. A rule left out is still \
+             active: aval_rule explains it and aval_rules with `all_traits: true` \
+             lists it. In a workspace `repo` is required.",
+            schema(vec![repo.clone()], vec![]),
+        ),
+        tool(
             "aval_heads",
             "Every slot that has a decision, with its state — the structured form \
              of HEADS.md, for orienting at the start of a task.\n\n\
@@ -411,7 +424,12 @@ fn tools() -> Vec<Json> {
              this for the heuristics — followed unless you argue why not, in \
              that place — or to filter by `adopted_by`. `all: true` adds the \
              inactive ones with the reason. No bodies: aval_rule <id> is the \
-             explanation. In a workspace `repo` is required, as for aval_heads.",
+             explanation. In a workspace `repo` is required, as for aval_heads.\n\n\
+             TRAITS: where the repository declares `areas`, rules about traits it \
+             does not have (a command line, a UI) are left out and counted in \
+             `omitted`. Left out is NOT inapplicable-by-decision: the rules stay \
+             active, aval_rule still explains them, and `all_traits: true` lists \
+             them.",
             schema(
                 vec![
                     (
@@ -438,6 +456,14 @@ fn tools() -> Vec<Json> {
                             "boolean",
                             "Include rules whose adopting record no longer holds, \
                              each with `inactive_reason`. Default false.",
+                        ),
+                    ),
+                    (
+                        "all_traits",
+                        prop(
+                            "boolean",
+                            "Include rules about traits this repository's areas \
+                             do not name. Default false.",
                         ),
                     ),
                     repo.clone(),
@@ -699,6 +725,7 @@ enum Ask<'a> {
     History { key: &'a str, scope: &'a str },
     Rules(render::Filter),
     Rule(&'a str),
+    Traits,
 }
 
 impl Ask<'_> {
@@ -712,6 +739,12 @@ impl Ask<'_> {
             Ask::History { key, scope } => render::history_in(l, key, scope),
             Ask::Rules(f) => render::rules_in(l, f),
             Ask::Rule(id) => render::rule_in(l, id),
+            Ask::Traits => render::Reply {
+                json: crate::traits::traits_json(l),
+                text: crate::traits::traits_text(l),
+                exit: 0,
+                is_error: false,
+            },
         }
     }
 }
@@ -799,6 +832,7 @@ fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
             Ask::Keys(detail)
         }
         "aval_heads" => Ask::Heads,
+        "aval_traits" => Ask::Traits,
         "aval_show" => match req_str(args, "record") {
             Ok(r) => Ask::Show(r),
             Err(e) => return error(id, INVALID_PARAMS, &e),
@@ -825,10 +859,16 @@ fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
                 Some(Json::Bool(b)) => *b,
                 Some(_) => return error(id, INVALID_PARAMS, "`all` must be a boolean"),
             };
+            let all_traits = match args.and_then(|a| a.get("all_traits")) {
+                None => false,
+                Some(Json::Bool(b)) => *b,
+                Some(_) => return error(id, INVALID_PARAMS, "`all_traits` must be a boolean"),
+            };
             Ask::Rules(render::Filter {
                 level,
                 adopted_by: opt_str(args, "adopted_by").map(str::to_string),
                 all,
+                all_traits,
             })
         }
         "aval_rule" => match req_str(args, "id") {
@@ -898,6 +938,8 @@ fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
                 // size argument, the same one heads and keys make.
                 Ask::Rule(_) => Some("aval_rule"),
                 Ask::Rules(_) => Some("aval_rules"),
+                // Areas describe one repository's files.
+                Ask::Traits => Some("aval_traits"),
                 // Paths belong to one repository, and a BM25 score is computed
                 // against one document collection: two corpora's rankings are
                 // not comparable numbers, so there is no map to hand back.

@@ -34,6 +34,7 @@
 
 use crate::load::Loaded;
 use crate::render::{self, Reply};
+use aval_core::applicability::{self, Omitted, Scope};
 use aval_core::json::Json;
 use aval_core::model::{Adr, AdrId, Entry, Rule, Slot};
 use aval_core::relevance::{self, Doc, Index};
@@ -585,6 +586,10 @@ pub fn relevant_in(l: &Loaded, q: &Query) -> Reply {
         .iter()
         .filter(|r| l.graph.rule_active(r).is_none())
         .collect();
+    // Only rules that apply to the paths asked about (SEMANTICS section 2.5):
+    // kept when they apply to any of them, and every rule when one of them is
+    // in no area. What traits left out is reported, never silently dropped.
+    let (active, omitted) = applicability::filter(reg, &Scope::for_query(reg, &paths), active);
     let rule_index = Index::build(rule_docs(&active));
     let mut rules: Vec<(&Rule, f64)> = active
         .iter()
@@ -601,7 +606,7 @@ pub fn relevant_in(l: &Loaded, q: &Query) -> Reply {
     rules.retain(|r| r.1 >= floor);
     rules.truncate(q.top);
 
-    render(l, q, &paths, &ranked, total, &rules)
+    render(l, q, &paths, &ranked, total, &rules, omitted.as_ref())
 }
 
 /// One key's verdict, and where else the corpus answers it.
@@ -641,6 +646,7 @@ fn render(
     ranked: &[Ranked],
     total: usize,
     rules: &[(&Rule, f64)],
+    omitted: Option<&Omitted>,
 ) -> Reply {
     let mut rows: Vec<Json> = Vec::new();
     let mut deps: Vec<Json> = Vec::new();
@@ -759,6 +765,9 @@ fn render(
         (n, true) => plural(n, "path", "paths"),
         (n, false) => format!("{} and a text query", plural(n, "path", "paths")),
     };
+    if let Some(n) = omitted.and_then(render::omitted_notice) {
+        text.push_str(&format!("\n{}\n", n));
+    }
     text.push_str(&format!(
         "\nshowing {} of {} matched, from {}. {}\n",
         plural(rows.len(), "key", "keys"),
@@ -797,6 +806,7 @@ fn render(
                 })
                 .collect::<Vec<_>>(),
         )
+        .set_opt("omitted", omitted.map(render::omitted_json))
         .set("dependencies", deps);
 
     Reply {

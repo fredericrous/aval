@@ -20,3 +20,4 @@ pub mod provenance;
 pub mod relevant;
 pub mod render;
 pub mod status;
+pub mod traits;

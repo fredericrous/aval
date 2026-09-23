@@ -160,6 +160,9 @@ pub struct Rule {
     /// The explanation and translation. May be empty.
     pub body: String,
     pub source: Option<String>,
+    /// The traits this rule is about (SEMANTICS section 2.5). Empty means
+    /// untargeted: the rule applies everywhere, exactly as before traits.
+    pub applies: Vec<String>,
     /// Repository-relative rules file, or the vendored pack file — the file in
     /// *this* repository a reader can open, exactly as `Adr.file` is.
     pub file: String,
@@ -186,6 +189,7 @@ impl Rule {
             statement: statement.into(),
             body: String::new(),
             source: None,
+            applies: Vec::new(),
             file: file.into(),
             pack: None,
         }
@@ -387,6 +391,39 @@ pub struct Registry {
     pub rules: Vec<String>,
     pub scopes: Vec<String>,
     pub keys: Vec<KeyDef>,
+    /// The trait vocabulary this registry declares itself (SEMANTICS section
+    /// 2.5). What packs add is kept apart in `pack_traits`, so a producer's
+    /// published pack carries its own vocabulary and never re-exports one it
+    /// borrowed.
+    pub traits: Vec<String>,
+    /// The trait vocabulary contributed by vendored packs.
+    pub pack_traits: Vec<String>,
+    /// Which parts of this repository have which traits. Consumer-local:
+    /// never written to, or read from, a pack.
+    pub areas: Vec<Area>,
+    /// Traits a reviewer says do not hold where detection reports them. Read
+    /// only by `aval traits --check`, never by rule selection.
+    pub disclaims: Vec<Area>,
+}
+
+/// One `areas:` or `disclaims:` entry: a glob and the traits it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Area {
+    pub glob: String,
+    pub traits: Vec<String>,
+    /// Line in the registry, for findings.
+    pub line: usize,
+}
+
+impl Area {
+    pub fn new(glob: impl Into<String>, traits: Vec<String>, line: usize) -> Area {
+        Area {
+            glob: glob.into(),
+            traits,
+            line,
+        }
+    }
 }
 
 impl Registry {
@@ -403,7 +440,37 @@ impl Registry {
             rules: Vec::new(),
             scopes: Vec::new(),
             keys: Vec::new(),
+            traits: Vec::new(),
+            pack_traits: Vec::new(),
+            areas: Vec::new(),
+            disclaims: Vec::new(),
         }
+    }
+
+    /// The trait vocabulary in force: this registry's own and every pack's,
+    /// sorted and without duplicates.
+    pub fn vocabulary(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .traits
+            .iter()
+            .chain(self.pack_traits.iter())
+            .cloned()
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    /// Fold a pack's trait vocabulary in. The library's half of what the
+    /// loader does for every vendored pack, so a caller assembling a corpus
+    /// without the binary gets the same vocabulary the CLI checks against.
+    pub fn adopt_pack_traits(&mut self, traits: &[String]) {
+        for t in traits {
+            if !self.pack_traits.contains(t) {
+                self.pack_traits.push(t.clone());
+            }
+        }
+        self.pack_traits.sort();
     }
 
     /// Whether this corpus keeps records of its own. A registry that only

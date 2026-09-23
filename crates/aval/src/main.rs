@@ -62,7 +62,12 @@ USAGE
                                            --names omits where it is decided
     aval rules [--level <level>]           the adopted rules, one line each;
                [--adopted-by <record>]     --level constraint|heuristic, --all
-               [--all]                     adds the inactive ones with the reason
+               [--all] [--all-traits]      adds the inactive ones with the reason,
+                                           --all-traits the ones about traits
+                                           this repository's areas do not name
+    aval traits [--summary]                what this repository says it is, and
+                [--detect | --check]       what its tracked files suggest;
+                                           ADVISORY detection, never a filter
     aval rule <id>                         one rule, with its translation and why
     aval check                             every invariant; the gate runs this
     aval heads [--write | --check]         the projection
@@ -94,6 +99,9 @@ OPTIONS
     --level       rules: constraint or heuristic
     --adopted-by  rules: only those one record adopts
     --all         rules: inactive rules too, each with the reason
+    --all-traits  rules: rules for every trait, not only this repository's
+    --summary     traits: the one line the session hook prints
+    --detect      traits: propose `areas:` from the tracked files
     --all-repos   resolve, keys, heads, history, rules: ask every corpus `aval repos`
                   lists, and report them keyed by name (exit 0 clean · 1 a
                   member contradicts or would not load · 3 none loaded)
@@ -106,6 +114,7 @@ EXIT
     resolve  0 active · 4 undecided · 5 contradiction · 6 retired · 7 unknown
     relevant 0 always · 2 usage, including an undeclared --scope
     rule     0 found · 7 unknown
+    traits   --check: 0 nothing to report · 1 findings · 3 could not inspect
     others   0 ok · 1 findings or stale
     always   1 tool failure · 2 usage · 3 unreadable or invalid corpus
     mcp      0 stdin closed · 1 transport failure · 2 usage. Never 3: a
@@ -129,6 +138,9 @@ struct Args {
     names: bool,
     all: bool,
     all_repos: bool,
+    all_traits: bool,
+    summary: bool,
+    detect: bool,
     write: bool,
     check: bool,
     dry_run: bool,
@@ -167,6 +179,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         names: false,
         all: false,
         all_repos: false,
+        all_traits: false,
+        summary: false,
+        detect: false,
         write: false,
         check: false,
         dry_run: false,
@@ -188,6 +203,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             // is on the whole word, so neither prefixes the other.
             "--all" => a.all = true,
             "--all-repos" => a.all_repos = true,
+            "--all-traits" => a.all_traits = true,
+            "--summary" => a.summary = true,
+            "--detect" => a.detect = true,
             "--write" => a.write = true,
             "--check" => a.check = true,
             "--dry-run" => a.dry_run = true,
@@ -315,6 +333,7 @@ fn run(args: &Args) -> i32 {
         "keys" => cmd_keys(args),
         "rules" => cmd_rules(args),
         "rule" => cmd_rule(args),
+        "traits" => cmd_traits(args),
         "repos" => cmd_repos(args),
         "mcp" => cmd_mcp(args),
         "check" => cmd_check(args),
@@ -545,6 +564,7 @@ fn cmd_rules(args: &Args) -> i32 {
         level,
         adopted_by: args.adopted_by.clone(),
         all: args.all,
+        all_traits: args.all_traits,
     };
     if args.all_repos {
         return all_repos(args, |l, _| render::rules_in(l, &filter));
@@ -558,8 +578,98 @@ fn cmd_rules(args: &Args) -> i32 {
     } else {
         print!("{}", render::rules_text(&l.graph, &filter));
         let _ = std::io::stdout().flush();
+        // stderr, never stdout: the session hook counts stdout lines.
+        if let Some(n) = render::rules_omitted(&l.graph, &filter)
+            .as_ref()
+            .and_then(render::omitted_notice)
+        {
+            eprintln!("aval: {}", n);
+        }
     }
     0
+}
+
+/// What this repository says it is (SEMANTICS section 2.5), and — with
+/// `--detect` or `--check` — what its tracked files suggest.
+fn cmd_traits(args: &Args) -> i32 {
+    if !args.positional.is_empty() {
+        eprintln!("aval: `traits` takes no arguments");
+        return E_USAGE;
+    }
+    let modes = [args.summary, args.detect, args.check]
+        .iter()
+        .filter(|x| **x)
+        .count();
+    if modes > 1 {
+        eprintln!("aval: `traits` takes one of --summary, --detect, --check");
+        return E_USAGE;
+    }
+    if args.all_repos {
+        eprintln!("aval: `traits` describes one repository; use -C <repo>");
+        return E_USAGE;
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    if args.summary {
+        // The hook's line. Reads the corpus only: no git, no detection.
+        if args.json {
+            println!("{}", aval::traits::traits_json(&l));
+        } else if let Some(line) = aval::traits::summary(&l) {
+            println!("{}", line);
+        }
+        return 0;
+    }
+    if !args.detect && !args.check {
+        if args.json {
+            println!("{}", aval::traits::traits_json(&l));
+        } else {
+            print!("{}", aval::traits::traits_text(&l));
+            let _ = std::io::stdout().flush();
+        }
+        return 0;
+    }
+    let inspected = aval::traits::tracked(&l.root)
+        .and_then(|files| aval::traits::detect(&l.root, &files).map(|found| (files, found)));
+    let (files, found) = match inspected {
+        Ok(x) => x,
+        Err(e) => {
+            // Could not look is not "found nothing" (section 14).
+            emit_error(args, E_INVALID, &e.to_string(), &[]);
+            return E_INVALID;
+        }
+    };
+    let reg = l.graph.registry();
+    if args.detect {
+        if args.json {
+            println!("{}", aval::traits::detect_json(&found));
+        } else {
+            print!("{}", aval::traits::detect_text(reg, &found));
+            let _ = std::io::stdout().flush();
+        }
+        return 0;
+    }
+    let findings = aval::traits::check(reg, &files, &found);
+    if args.json {
+        println!("{}", aval::traits::check_json(&findings));
+    } else if findings.is_empty() {
+        println!("traits: every detected trait is declared or disclaimed, and every glob matches");
+    } else {
+        for f in &findings {
+            println!("{}: {}", f.kind, f.message);
+        }
+        println!(
+            "{} finding(s). Declare the trait under `areas:`, or say why it does not \
+             hold under `disclaims:`.",
+            findings.len()
+        );
+    }
+    if findings.is_empty() {
+        0
+    } else {
+        E_FAIL
+    }
 }
 
 /// One rule, with its translation.

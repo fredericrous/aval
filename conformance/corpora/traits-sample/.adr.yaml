@@ -1,0 +1,19 @@
+# Traits and areas (SEMANTICS section 2.5): one rule per targeting shape, and
+# one area per row of the applicability table.
+dir: docs/adr
+traits: [cli, ui, data]
+rules:
+  - docs/principles/cli.md
+  - docs/principles/ui.md
+  - docs/principles/data.md
+  - docs/principles/any.md
+  - docs/principles/general.md
+scopes: []
+keys:
+  code.practice:
+    description: Which practices first-party code follows
+areas:
+  "web/**": [ui]
+  "web/cli/**": [cli]
+  "cmd/**": [cli]
+  "docs/**": []

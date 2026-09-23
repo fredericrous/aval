@@ -5,6 +5,7 @@
 
 use crate::load::{self, Corpora, Loaded, Repo};
 use crate::provenance::{self, Provenance};
+use aval_core::applicability::{self, Omitted, Scope};
 use aval_core::graph::{DerivedStatus, Graph, Inconsistent, Unknown, Verdict};
 use aval_core::json::Json;
 use aval_core::model::{Adr, AdrId, Finding, Level, Rule, Slot};
@@ -496,6 +497,9 @@ pub struct Filter {
     pub adopted_by: Option<String>,
     /// Inactive rules too, each with the reason it is inactive.
     pub all: bool,
+    /// Rules for every trait, not only the ones this repository's areas name
+    /// (SEMANTICS section 2.5).
+    pub all_traits: bool,
 }
 
 /// The rules a filter selects, in the order they are printed.
@@ -504,8 +508,8 @@ pub struct Filter {
 /// constraint is followed and a heuristic is argued about, and a caller reading
 /// a long list top-down meets the binding ones first. The corpus's own rule
 /// order is by id already (`load`), so this is one stable sort on the level.
-fn selected<'a>(g: &'a Graph, f: &Filter) -> Vec<(&'a Rule, Option<String>)> {
-    let mut v: Vec<(&Rule, Option<String>)> = g
+fn selected<'a>(g: &'a Graph, f: &Filter) -> (Vec<(&'a Rule, Option<String>)>, Option<Omitted>) {
+    let v: Vec<(&Rule, Option<String>)> = g
         .corpus()
         .rules
         .iter()
@@ -518,8 +522,52 @@ fn selected<'a>(g: &'a Graph, f: &Filter) -> Vec<(&'a Rule, Option<String>)> {
         .map(|r| (r, g.rule_reason(r)))
         .filter(|(_, reason)| f.all || reason.is_none())
         .collect();
+    // Traits last, so `omitted` counts what traits alone removed from what the
+    // caller would otherwise have been shown.
+    let scope = if f.all_traits {
+        Scope::All
+    } else {
+        Scope::for_query(g.registry(), &[])
+    };
+    let (kept, omitted) =
+        applicability::filter(g.registry(), &scope, v.iter().map(|(r, _)| *r).collect());
+    let mut v: Vec<(&Rule, Option<String>)> = v
+        .into_iter()
+        .filter(|(r, _)| kept.iter().any(|k| std::ptr::eq(*k, *r)))
+        .collect();
     v.sort_by(|(x, _), (y, _)| x.level.cmp(&y.level).then(x.id.cmp(&y.id)));
-    v
+    (v, omitted)
+}
+
+/// `omitted` as JSON (SEMANTICS section 2.5): one shape on every surface.
+pub fn omitted_json(o: &Omitted) -> Json {
+    Json::obj()
+        .set("constraints", o.constraints)
+        .set("heuristics", o.heuristics)
+        .set(
+            "traits",
+            o.traits
+                .iter()
+                .map(|t| Json::from(t.as_str()))
+                .collect::<Vec<Json>>(),
+        )
+}
+
+/// The one-line omission notice, or `None` when nothing was hidden.
+pub fn omitted_notice(o: &Omitted) -> Option<String> {
+    if o.total() == 0 {
+        return None;
+    }
+    Some(format!(
+        "hidden by traits ({}): {} constraint(s), {} heuristic(s); `aval rules --all-traits` lists them",
+        if o.traits.is_empty() {
+            "none declared".to_string()
+        } else {
+            o.traits.join(", ")
+        },
+        o.constraints,
+        o.heuristics
+    ))
 }
 
 fn rule_row_json(r: &Rule, reason: &Option<String>) -> Json {
@@ -529,6 +577,15 @@ fn rule_row_json(r: &Rule, reason: &Option<String>) -> Json {
         .set("adopts", r.adopts.as_str())
         .set("statement", r.statement.as_str())
         .set_opt("source", r.source.clone())
+        .set_opt(
+            "applies",
+            (!r.applies.is_empty()).then(|| {
+                r.applies
+                    .iter()
+                    .map(|t| Json::from(t.as_str()))
+                    .collect::<Vec<Json>>()
+            }),
+        )
         .set("file", r.file.as_str())
         .set_opt("pack", r.pack.clone())
         .set("active", reason.is_none())
@@ -536,15 +593,26 @@ fn rule_row_json(r: &Rule, reason: &Option<String>) -> Json {
 }
 
 pub fn rules_json(g: &Graph, f: &Filter) -> Json {
-    let rows: Vec<Json> = selected(g, f)
+    let (rows, omitted) = selected(g, f);
+    let rows: Vec<Json> = rows
         .iter()
         .map(|(r, reason)| rule_row_json(r, reason))
         .collect();
-    Json::obj().set("rules", rows)
+    Json::obj()
+        .set("rules", rows)
+        .set_opt("omitted", omitted.as_ref().map(omitted_json))
 }
 
+/// What traits hid from `rules_text`, for the caller to write to stderr.
+pub fn rules_omitted(g: &Graph, f: &Filter) -> Option<Omitted> {
+    selected(g, f).1
+}
+
+/// The listing, and nothing else: stdout stays pure rule lines, because the
+/// session hook counts them (`grep -c .`). The omission notice is the caller's
+/// to write, to stderr.
 pub fn rules_text(g: &Graph, f: &Filter) -> String {
-    let rows = selected(g, f);
+    let (rows, _) = selected(g, f);
     // Padded to the longest id in what is actually printed, so the statements
     // line up and a short list is not padded to a long id it does not contain.
     let width = rows.iter().map(|(r, _)| r.id.len()).max().unwrap_or(0);
@@ -831,7 +899,15 @@ pub fn show_in(l: &Loaded, id: &str) -> Reply {
 pub fn rules_in(l: &Loaded, f: &Filter) -> Reply {
     Reply {
         json: rules_json(&l.graph, f),
-        text: rules_text(&l.graph, f),
+        // A listing read by a person, per repository: the notice rides in the
+        // text here, because there is no separate stream to put it on.
+        text: {
+            let mut t = rules_text(&l.graph, f);
+            if let Some(n) = rules_omitted(&l.graph, f).as_ref().and_then(omitted_notice) {
+                t.push_str(&format!("({})\n", n));
+            }
+            t
+        },
         // An empty list is an answer: this corpus adopts no rule matching that
         // filter. Nothing failed, so nothing is reported as having failed.
         exit: 0,
