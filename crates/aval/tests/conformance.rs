@@ -543,3 +543,124 @@ fn every_relevance_case_holds() {
         );
     }
 }
+
+// --- traits (SEMANTICS section 2.5) -----------------------------------------
+
+fn traits_battery() -> Json {
+    let p = conformance_dir().join("traits.json");
+    let src = std::fs::read_to_string(&p).expect("read traits.json");
+    json::parse(&src).expect("traits.json parses")
+}
+
+fn obj_keys(v: &Json) -> Vec<String> {
+    match v {
+        Json::Obj(m) => m.keys().cloned().collect(),
+        _ => panic!("expected an object, found {}", v),
+    }
+}
+
+fn strings(v: &Json) -> Vec<String> {
+    v.as_arr()
+        .unwrap_or(&[])
+        .iter()
+        .map(|x| x.as_str().expect("a string").to_string())
+        .collect()
+}
+
+#[test]
+fn the_traits_battery_is_non_trivial() {
+    let b = traits_battery();
+    for (field, min) in [("cases", "min_cases"), ("globs", "min_globs")] {
+        let n = b.get(field).and_then(|c| c.as_arr()).map_or(0, |c| c.len());
+        let m = b.get(min).and_then(|m| m.as_i64()).unwrap_or(0) as usize;
+        assert!(m > 0, "traits.json must declare {}", min);
+        assert!(n >= m, "{}: {} entries, fewer than {}", field, n, m);
+    }
+}
+
+#[test]
+fn every_glob_case_holds() {
+    use aval_core::glob;
+    let b = traits_battery();
+    for c in b.get("globs").and_then(|c| c.as_arr()).expect("globs") {
+        let g = want_str(c, "glob").expect("glob");
+        for k in obj_keys(c) {
+            assert!(
+                ["glob", "path", "matches", "valid"].contains(&k.as_str()),
+                "unknown glob-case field `{}`",
+                k
+            );
+        }
+        match c.get("valid") {
+            Some(Json::Bool(false)) => {
+                assert!(glob::bad(g).is_some(), "`{}` must be refused", g);
+                assert!(!glob::matches(g, "a/b"), "`{}` must match nothing", g);
+            }
+            Some(_) => panic!("`valid` is only ever false"),
+            None => {
+                assert!(glob::bad(g).is_none(), "`{}` must be accepted", g);
+                let p = want_str(c, "path").expect("path");
+                let want = matches!(c.get("matches"), Some(Json::Bool(true)));
+                assert_eq!(glob::matches(g, p), want, "`{}` against `{}`", g, p);
+            }
+        }
+    }
+}
+
+#[test]
+fn every_applicability_case_holds() {
+    use aval_core::applicability::{filter, Scope};
+    let b = traits_battery();
+    let mut seen: Vec<String> = Vec::new();
+    for c in b.get("cases").and_then(|c| c.as_arr()).expect("cases") {
+        let name = want_str(c, "name").expect("case.name").to_string();
+        assert!(!seen.contains(&name), "duplicate case `{}`", name);
+        seen.push(name.clone());
+        let l = loaded(want_str(c, "corpus").expect("case.corpus"));
+        let paths = strings(
+            c.get("query")
+                .and_then(|q| q.get("paths"))
+                .expect("query.paths"),
+        );
+        let exp = c.get("expected").expect("expected");
+        for k in obj_keys(exp) {
+            assert!(
+                ["kept", "omitted"].contains(&k.as_str()),
+                "{}: unknown expected field `{}`",
+                name,
+                k
+            );
+        }
+        let reg = l.graph.registry();
+        let active: Vec<_> = l
+            .graph
+            .corpus()
+            .rules
+            .iter()
+            .filter(|r| l.graph.rule_reason(r).is_none())
+            .collect();
+        let (kept, omitted) = filter(reg, &Scope::for_query(reg, &paths), active);
+        let mut ids: Vec<String> = kept.iter().map(|r| r.id.clone()).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            strings(exp.get("kept").expect("kept")),
+            "{}: kept",
+            name
+        );
+        match exp.get("omitted") {
+            Some(Json::Null) | None => {
+                assert!(omitted.is_none(), "{}: omitted must be absent", name)
+            }
+            Some(o) => {
+                let got = omitted.unwrap_or_else(|| panic!("{}: omitted must be present", name));
+                assert_eq!(
+                    aval::render::omitted_json(&got).to_string(),
+                    o.to_string(),
+                    "{}: omitted",
+                    name
+                );
+            }
+        }
+    }
+}

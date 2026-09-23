@@ -32,7 +32,7 @@
 use crate::model::*;
 use crate::yaml;
 
-const FILE_FIELDS: &[&str] = &["adopts", "source"];
+const FILE_FIELDS: &[&str] = &["adopts", "source", "applies"];
 
 fn a(msg: impl Into<String>) -> Finding {
     Finding::new(Layer::A, "rules-parse", msg)
@@ -194,6 +194,43 @@ pub fn parse(file: &str, src: &str) -> Result<Vec<Rule>, Vec<Finding>> {
         },
     };
 
+    // The traits the file's rules are about (SEMANTICS section 2.5). Whether
+    // each is in the vocabulary needs the packs, so that is
+    // `rule-applies-declared` in the graph; the shape is decided here.
+    let mut applies = Vec::new();
+    if let Some(n) = doc.get("applies") {
+        let line = n.line + offset - 1;
+        match n.as_seq() {
+            None if n.is_null() => {}
+            None => out.push(
+                a(format!(
+                    "`applies` must be a list of traits, found {}",
+                    n.kind()
+                ))
+                .at(file, line),
+            ),
+            Some(items) => {
+                for it in items {
+                    match it.as_str() {
+                        Some(t) => match crate::applicability::bad_trait(t) {
+                            Some(m) => out.push(a(m).at(file, line)),
+                            None => applies.push(t.to_string()),
+                        },
+                        None => out.push(
+                            a(format!(
+                                "`applies` must list trait names, found {}",
+                                it.kind()
+                            ))
+                            .at(file, line),
+                        ),
+                    }
+                }
+            }
+        }
+    }
+    applies.sort();
+    applies.dedup();
+
     let lines: Vec<&str> = body.lines().collect();
     let mut spans: Vec<Span> = Vec::new();
     let mut fenced = false;
@@ -313,6 +350,7 @@ pub fn parse(file: &str, src: &str) -> Result<Vec<Rule>, Vec<Finding>> {
         );
         rule.body = body;
         rule.source = source.clone();
+        rule.applies = applies.clone();
         rules.push(rule);
     }
 

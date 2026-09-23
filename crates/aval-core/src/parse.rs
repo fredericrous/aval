@@ -19,7 +19,17 @@ const ENTRY_FIELDS: &[&str] = &[
     "overrides",
     "reason",
 ];
-const REGISTRY_FIELDS: &[&str] = &["dir", "sources", "packs", "rules", "scopes", "keys"];
+const REGISTRY_FIELDS: &[&str] = &[
+    "dir",
+    "sources",
+    "packs",
+    "rules",
+    "scopes",
+    "keys",
+    "traits",
+    "areas",
+    "disclaims",
+];
 const KEYDEF_FIELDS: &[&str] = &["description", "scopes"];
 
 fn a(check: &'static str, msg: impl Into<String>) -> Finding {
@@ -559,6 +569,71 @@ fn path_list(doc: &Node, key: &str, file: &str, out: &mut Vec<Finding>) -> Vec<S
     list
 }
 
+/// An `areas:` or `disclaims:` map: glob → list of trait names.
+fn area_map(doc: &Node, key: &str, file: &str, out: &mut Vec<Finding>) -> Vec<Area> {
+    let p = |m: String| a("areas-parse", m);
+    let mut res = Vec::new();
+    let Some(node) = doc.get(key) else {
+        return res;
+    };
+    if node.is_null() {
+        return res;
+    }
+    let Some(entries) = node.as_map() else {
+        out.push(
+            p(format!(
+                "`{}` must be a mapping of glob to traits, found {}",
+                key,
+                node.kind()
+            ))
+            .at(file, node.line),
+        );
+        return res;
+    };
+    for (glob, v) in entries {
+        if let Some(m) = crate::glob::bad(glob) {
+            out.push(p(m).at(file, v.line));
+            continue;
+        }
+        let Some(items) = v.as_seq() else {
+            out.push(
+                p(format!(
+                    "`{}` under `{}` must be a list of traits, found {}; write `[]` \
+                     for a part with none",
+                    glob,
+                    key,
+                    v.kind()
+                ))
+                .at(file, v.line),
+            );
+            continue;
+        };
+        let mut traits = Vec::new();
+        for it in items {
+            match it.as_str() {
+                Some(t) => match crate::applicability::bad_trait(t) {
+                    Some(m) => out.push(p(m).at(file, it.line)),
+                    None => traits.push(t.to_string()),
+                },
+                None => out.push(
+                    p(format!(
+                        "`{}` must list trait names, found {}",
+                        glob,
+                        it.kind()
+                    ))
+                    .at(file, it.line),
+                ),
+            }
+        }
+        if res.iter().any(|x: &Area| x.glob == *glob) {
+            out.push(p(format!("`{}` is listed twice under `{}`", glob, key)).at(file, v.line));
+            continue;
+        }
+        res.push(Area::new(glob.clone(), traits, v.line));
+    }
+    res
+}
+
 /// Parse a `.adr.yaml` registry.
 pub fn registry(file: &str, src: &str) -> Result<Registry, Vec<Finding>> {
     let mut out = Vec::new();
@@ -655,15 +730,29 @@ pub fn registry(file: &str, src: &str) -> Result<Registry, Vec<Finding>> {
         },
     }
 
+    // Traits (SEMANTICS section 2.5). Whether a name is in the vocabulary
+    // needs the packs, so that is `areas-declared` in the graph; what one
+    // document can decide — the grammar of a name and of a glob — is here.
+    let traits = want_str_list(&doc, "traits", file, &mut out);
+    for t in &traits {
+        if let Some(m) = crate::applicability::bad_trait(t) {
+            out.push(a("frontmatter-parses", m).at(file, doc.get("traits").map_or(1, |n| n.line)));
+        }
+    }
+    let areas = area_map(&doc, "areas", file, &mut out);
+    let disclaims = area_map(&doc, "disclaims", file, &mut out);
+
     if out.is_empty() {
-        Ok(Registry {
-            dir,
-            sources,
-            packs,
-            rules,
-            scopes,
-            keys,
-        })
+        let mut reg = Registry::empty(dir);
+        reg.sources = sources;
+        reg.packs = packs;
+        reg.rules = rules;
+        reg.scopes = scopes;
+        reg.keys = keys;
+        reg.traits = traits;
+        reg.areas = areas;
+        reg.disclaims = disclaims;
+        Ok(reg)
     } else {
         Err(out)
     }

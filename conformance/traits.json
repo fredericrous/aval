@@ -1,0 +1,129 @@
+{
+  "description": [
+    "Conformance battery for traits and areas (SEMANTICS section 2.5). Normative:",
+    "a change here is the signal that behaviour moved (section 15).",
+    "",
+    "`globs` pins the dialect of an `areas:` key: `valid: false` must be refused by",
+    "`areas-parse` and match nothing; otherwise `matches` is the answer for `path`.",
+    "",
+    "`cases` pins the applicability table. Each case loads a corpus, queries rules",
+    "for `paths` (empty means the repository's union R), and asserts the ids kept —",
+    "every ACTIVE rule the scope keeps, sorted — and `omitted`, which is null when",
+    "the registry declares no areas. An unknown field in `expected` throws, and",
+    "`min_cases` keeps an empty or mis-parsed file from passing green."
+  ],
+  "min_cases": 8,
+  "min_globs": 25,
+  "globs": [
+    { "glob": "a/**/b", "path": "a/b", "matches": true },
+    { "glob": "a/**/b", "path": "a/x/y/b", "matches": true },
+    { "glob": "a/**/b", "path": "a/x/c", "matches": false },
+    { "glob": "src/**", "path": "src/main.rs", "matches": true },
+    { "glob": "src/**", "path": "src/a/b/c.rs", "matches": true },
+    { "glob": "src/**", "path": "src", "matches": false },
+    { "glob": "**", "path": "any/depth/at/all.txt", "matches": true },
+    { "glob": "**/main.go", "path": "main.go", "matches": true },
+    { "glob": "cmd/*/main.go", "path": "cmd/aval/main.go", "matches": true },
+    { "glob": "cmd/*/main.go", "path": "cmd/a/b/main.go", "matches": false },
+    { "glob": "*", "path": "a/b", "matches": false },
+    { "glob": "?.rs", "path": "a.rs", "matches": true },
+    { "glob": "?.rs", "path": "ab.rs", "matches": false },
+    { "glob": "*", "path": ".github", "matches": true },
+    { "glob": "**", "path": ".github/workflows/ci.yaml", "matches": true },
+    { "glob": "Web/**", "path": "web/a.ts", "matches": false },
+    { "glob": "*.MD", "path": "README.md", "matches": false },
+    { "glob": "", "valid": false },
+    { "glob": "/web/**", "valid": false },
+    { "glob": "./web/**", "valid": false },
+    { "glob": "web/../x", "valid": false },
+    { "glob": "web/", "valid": false },
+    { "glob": "web/[ab]", "valid": false },
+    { "glob": "{web,cmd}/**", "valid": false },
+    { "glob": "!web/**", "valid": false },
+    { "glob": "web**", "valid": false },
+    { "glob": "a//b", "valid": false }
+  ],
+  "cases": [
+    {
+      "name": "no-areas-filters-nothing",
+      "corpus": "traits-none",
+      "query": { "paths": [] },
+      "expected": {
+        "kept": ["any.one", "cli.one", "cli.two", "data.one", "general.one", "ui.one"],
+        "omitted": null
+      }
+    },
+    {
+      "name": "no-path-uses-the-repository-union",
+      "corpus": "traits-sample",
+      "query": { "paths": [] },
+      "expected": {
+        "kept": ["any.one", "cli.one", "cli.two", "general.one", "ui.one"],
+        "omitted": { "constraints": 1, "heuristics": 0, "traits": ["cli", "ui"] }
+      }
+    },
+    {
+      "name": "overlapping-areas-union",
+      "corpus": "traits-sample",
+      "query": { "paths": ["web/cli/main.ts"] },
+      "expected": {
+        "kept": ["any.one", "cli.one", "cli.two", "general.one", "ui.one"],
+        "omitted": { "constraints": 1, "heuristics": 0, "traits": ["cli", "ui"] }
+      }
+    },
+    {
+      "name": "one-area",
+      "corpus": "traits-sample",
+      "query": { "paths": ["web/app.tsx"] },
+      "expected": {
+        "kept": ["any.one", "general.one", "ui.one"],
+        "omitted": { "constraints": 2, "heuristics": 1, "traits": ["ui"] }
+      }
+    },
+    {
+      "name": "empty-area-keeps-only-untargeted",
+      "corpus": "traits-sample",
+      "query": { "paths": ["docs/readme.md"] },
+      "expected": {
+        "kept": ["any.one", "general.one"],
+        "omitted": { "constraints": 3, "heuristics": 1, "traits": [] }
+      }
+    },
+    {
+      "name": "uncovered-path-filters-nothing",
+      "corpus": "traits-sample",
+      "query": { "paths": ["scripts/release.sh"] },
+      "expected": {
+        "kept": ["any.one", "cli.one", "cli.two", "data.one", "general.one", "ui.one"],
+        "omitted": { "constraints": 0, "heuristics": 0, "traits": ["cli", "ui"] }
+      }
+    },
+    {
+      "name": "one-uncovered-path-among-several-filters-nothing",
+      "corpus": "traits-sample",
+      "query": { "paths": ["web/app.tsx", "scripts/release.sh"] },
+      "expected": {
+        "kept": ["any.one", "cli.one", "cli.two", "data.one", "general.one", "ui.one"],
+        "omitted": { "constraints": 0, "heuristics": 0, "traits": ["cli", "ui"] }
+      }
+    },
+    {
+      "name": "several-paths-keep-on-any",
+      "corpus": "traits-sample",
+      "query": { "paths": ["web/app.tsx", "cmd/main.go"] },
+      "expected": {
+        "kept": ["any.one", "cli.one", "cli.two", "general.one", "ui.one"],
+        "omitted": { "constraints": 1, "heuristics": 0, "traits": ["cli", "ui"] }
+      }
+    },
+    {
+      "name": "omitted-only-when-every-path-hides-it",
+      "corpus": "traits-sample",
+      "query": { "paths": ["docs/readme.md", "web/app.tsx"] },
+      "expected": {
+        "kept": ["any.one", "general.one", "ui.one"],
+        "omitted": { "constraints": 2, "heuristics": 1, "traits": ["ui"] }
+      }
+    }
+  ]
+}

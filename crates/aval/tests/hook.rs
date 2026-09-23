@@ -630,3 +630,103 @@ fn an_ignored_claude_directory_is_reported() {
         got.out
     );
 }
+
+// --- traits, a stale binary, and a corpus that will not load (1.7.0) ---------
+
+fn path_with_aval() -> String {
+    let dir = Path::new(bin()).parent().unwrap().display().to_string();
+    format!("{}:{}", dir, std::env::var("PATH").unwrap())
+}
+
+fn rules_corpus(name: &str, tail: &str) -> PathBuf {
+    let r = scratch(name);
+    fs::write(
+        r.join(".adr.yaml"),
+        format!(
+            "dir: docs/adr\ntraits: [cli]\nrules:\n  - docs/p/book.md\nscopes: []\nkeys:\n  a.b:\n{}",
+            tail
+        ),
+    )
+    .unwrap();
+    fs::create_dir_all(r.join("docs/p")).unwrap();
+    fs::write(
+        r.join("docs/p/book.md"),
+        "---\nadopts: ADR-0001\napplies: [cli]\n---\n\
+         ## cli.exit [constraint]\n\nUsage errors exit 2.\n\n\
+         ## cli.help [heuristic]\n\nHelp leads with examples.\n",
+    )
+    .unwrap();
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    r
+}
+
+#[test]
+fn the_hook_prints_the_traits_line_and_counts_only_rule_lines() {
+    let r = rules_corpus("traits", "areas:\n  \"docs/**\": []\n");
+    let got = sh(&r, Some(&path_with_aval()));
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    // Everything targeted is hidden: no constraint lines, so no rules block,
+    // and the stderr notice never became a counted heuristic.
+    assert!(!got.out.contains("cli.exit"), "{}", got.out);
+    assert!(!got.out.contains("heuristics beside these"), "{}", got.out);
+    assert!(
+        got.out
+            .contains("(traits here: none — hidden by traits: 1 constraint(s), 1 heuristic(s)"),
+        "{}",
+        got.out
+    );
+}
+
+#[test]
+fn the_hook_says_nothing_about_traits_without_areas() {
+    let r = rules_corpus("no-traits", "");
+    let got = sh(&r, Some(&path_with_aval()));
+    assert!(got.out.contains("cli.exit"), "{}", got.out);
+    assert!(
+        got.out.contains("(1 heuristics beside these)"),
+        "{}",
+        got.out
+    );
+    assert!(!got.out.contains("traits here"), "{}", got.out);
+}
+
+#[test]
+fn an_aval_older_than_the_hook_says_so_first() {
+    let r = scratch("stale-binary");
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    let p = r.join(".claude/hooks/aval-heads.sh");
+    let s = fs::read_to_string(&p).unwrap();
+    fs::write(&p, s.replacen(env!("CARGO_PKG_VERSION"), "99.0.0", 1)).unwrap();
+    let got = sh(&r, Some(&path_with_aval()));
+    assert!(
+        got.out.starts_with(&format!(
+            "AVAL {} IS OLDER THAN THIS HOOK (written by 99.0.0)",
+            env!("CARGO_PKG_VERSION")
+        )),
+        "{}",
+        got.out
+    );
+    // The decisions still follow when the corpus loads.
+    assert!(got.out.contains("| a.b |"), "{}", got.out);
+
+    // The same release, or a newer binary, says nothing.
+    fs::write(&p, s.replacen(env!("CARGO_PKG_VERSION"), "0.1.0", 1)).unwrap();
+    assert!(!sh(&r, Some(&path_with_aval())).out.contains("OLDER THAN"));
+}
+
+#[test]
+fn a_corpus_that_will_not_load_gets_one_line_not_silence() {
+    let r = scratch("broken");
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    let reg = fs::read_to_string(r.join(".adr.yaml")).unwrap();
+    fs::write(r.join(".adr.yaml"), format!("{}areaz: 1\n", reg)).unwrap();
+    let got = sh(&r, Some(&path_with_aval()));
+    assert_eq!(got.code, 0);
+    assert!(
+        got.out
+            .contains("aval heads could not load this corpus (exit 3); run `aval check`"),
+        "{}",
+        got.out
+    );
+    assert!(!got.out.contains("ARCHITECTURE DECISIONS"), "{}", got.out);
+}

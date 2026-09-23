@@ -261,7 +261,8 @@ different edges:
 | `aval heads [--write\|--check]` | the projection |
 | `aval show ADR-0015` | derived status, including partial supersession |
 | `aval history <key>` | the chain, labelled as history |
-| `aval rules [--level L] [--all]` | the rules the decisions have adopted, one line each |
+| `aval rules [--level L] [--all] [--all-traits]` | the rules the decisions have adopted, one line each |
+| `aval traits [--summary\|--detect\|--check]` | what this repository says it is, and what its tracked files suggest |
 | `aval rule <id>` | one rule, with its translation and why |
 | `aval hook install [--check]` | put the heads in front of an agent at session start |
 | `aval pack [--write\|--check]` | publish this corpus's declarations for others to read |
@@ -307,6 +308,39 @@ in that place, and is fetched on demand. Precedence, which the hook also
 prints: the decision at the scope asked, then the default-scope decision, then
 these rules, then the book a rule cites — as explanation only. Remembered
 advice from that book does not outrank a rule here.
+
+### Traits: rules that only apply where the thing exists
+
+Rules about command-line programs mean nothing in a repository that ships none.
+A rule file says what it is about, the fleet corpus declares the vocabulary,
+and each repository declares which of its parts have which traits:
+
+```yaml
+# a rule file's frontmatter
+applies: [cli]
+
+# the producer's .adr.yaml — travels in its pack
+traits: [cli, ui]
+
+# a consumer's .adr.yaml — its own, never in a pack
+areas:
+  "web/**": [ui]
+  "cmd/**": [cli]
+disclaims:
+  "tools/**": [cli]
+```
+
+With `areas` declared, `aval rules` and the hook list only rules that apply to
+the traits declared, and **say what they hid** — on stderr, in `omitted` on
+every `--json` and tool payload, and in one hook line printed even when nothing
+is hidden. A hidden rule is still active: `aval rule <id>` explains it and
+`--all-traits` lists it. Without `areas`, nothing changes.
+
+`aval traits --detect` proposes areas from the files git tracks, and `aval
+traits --check` reports what the declaration misses, locally per package, plus
+any glob that matches nothing. Detection is advisory and leans toward
+reporting: a false positive costs one `disclaims` line, while a miss would hide
+a constraint. It never filters anything on its own.
 
 ## Sharing one decision across repositories
 

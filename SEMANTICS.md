@@ -83,6 +83,9 @@ keys:
   listed.
 - `keys` — the closed key vocabulary. `description` is for humans and for the
   did-you-mean index; it carries no semantics.
+- `traits`, `areas`, `disclaims` — the trait vocabulary, and which parts of
+  this repository have which traits (§2.5). Optional. They change what is
+  displayed, never what resolves.
 
 ### 2.1 Per-key scopes
 
@@ -395,9 +398,10 @@ included.
 ```
 
 - Frontmatter carries `adopts` (REQUIRED; a record id local to this corpus,
-  never a vendored `pack:ADR` id — a consumer does not state the fleet's rules)
-  and `source` (optional, one line, printable per §3.7). An unknown field is a
-  Layer A error, as in ADR frontmatter and for §3.2's reason.
+  never a vendored `pack:ADR` id — a consumer does not state the fleet's
+  rules), `source` (optional, one line, printable per §3.7) and `applies`
+  (optional, a list of traits, §2.5). An unknown field is a Layer A error, as
+  in ADR frontmatter and for §3.2's reason.
 - A rule starts at a line matching `## <id> [<level>]` **exactly**: two hashes,
   one space, the id, one space, the level in square brackets, nothing else.
   `<level>` is `constraint` or `heuristic`.
@@ -476,6 +480,133 @@ how the estate used to be written. `aval rules --all` shows it with the reason;
 Layer C's `links-resolve` runs over rule files: they are documents of this
 repository, a body cites the code it is about, and a citation that rots there
 misleads exactly as much as one in a record.
+
+### 2.5 Traits and areas
+
+A scope answers "which answer holds here". Some questions have one answer
+everywhere and simply do not arise in most places: rules for command-line
+programs mean nothing in a repository that ships no command line, and rules for
+screens mean nothing in an operator. Scopes cannot say that — a query at a
+scope falls back to `*` (§5) — and printing every such constraint at every
+session start spends context on advice that has no subject.
+
+A **trait** names a thing a part of a repository has. It is **applicability,
+never resolution**: nothing in this section changes a verdict, an activity, or
+what `check` reports on a corpus that does not use it.
+
+```yaml
+# producer: the vocabulary, carried in its pack
+traits: [cli, ui]
+
+# consumer: which parts of this repository have which traits
+areas:
+  "web/**": [ui]
+  "cmd/**": [cli]
+disclaims:
+  "tools/**": [cli]
+```
+
+```markdown
+---
+adopts: ADR-0021
+applies: [cli]
+---
+```
+
+- `traits` — the closed trait vocabulary: lowercase letters, digits and `-`,
+  starting with a letter, at most 32 characters. The vocabulary in force is the
+  union of the registry's own and every pack's; a producer's pack carries only
+  its own, never one it borrowed.
+- `applies` — rule-file frontmatter (§2.4): the traits a rule is about. Every
+  name MUST be in the vocabulary (`rule-applies-declared`). An absent
+  `applies` and `applies: []` mean the same thing: the rule is **untargeted**
+  and applies everywhere.
+- `areas` — a map from a glob (below) to a list of traits. Every name MUST be
+  in the vocabulary (`areas-declared`) and every glob well-formed
+  (`areas-parse`). An area is a **reviewed declaration** of what a part of this
+  repository is.
+- `disclaims` — the same shape and the same checks. It records a reviewer
+  saying a trait that detection reports does **not** hold there. Only `traits
+  --check` reads it; rule selection never does.
+- `areas` and `disclaims` are **consumer-local**. They describe this
+  repository's files, which no other repository has, so a pack MUST NOT carry
+  them and a pack that does is refused (`pack-parses`).
+
+#### Applicability
+
+A rule **applies** to a set of traits T when its `applies` is empty or shares
+a name with T. R is the union of the traits of every declared area.
+
+| Situation | Traits used |
+|---|---|
+| no `areas`, or an empty map | nothing is filtered — selection and text output are exactly as without this section |
+| no path (the hook, `aval rules`, the `aval_rules` tool) | R |
+| a path matching several areas | the union of their traits |
+| a path matching an area that declares `[]` | the empty set: only untargeted rules apply there |
+| a path matching no area | nothing is filtered for that path |
+| several paths queried | a rule is kept when it applies to **any** of them, and omitted only when every one hides it |
+
+An uncovered path filters nothing on purpose. Declaring `web/**` must not
+silently remove rules from everything else in the repository.
+
+**Filtering is display, never activity.** A rule hidden by traits is still
+active (§2.4). `aval rule <id>` explains it whatever the areas say, and `aval
+rules --all-traits` lists everything. **Every surface that filters reports what
+it hid**, as `omitted`: the number of constraints and of heuristics removed by
+traits alone, counted after every other filter the caller asked for (level,
+adopting record, activity), and the traits in force. The field is present
+whenever `areas` is declared, zeros included, and absent otherwise. Absence
+from a filtered list is not evidence (§5.1), and a list that did not say it
+was filtered would be read as complete.
+
+#### Globs
+
+Area and disclaim keys are globs. This is a deliberate exception to §2.2's
+literal paths: an area describes a part of a tree, not a file to read, and
+what stands in for §2.2's error is that `traits --check` reports a glob
+matching no tracked file.
+
+- Paths are repository-relative, `/`-separated, and compared
+  **case-sensitively** — git's paths are, whatever the filesystem does.
+- `*` matches any run of characters within one segment, `?` one character;
+  neither matches `/`. Both **do** match a leading `.`: this is git's
+  pathspec behaviour, not a shell's.
+- `**` as a whole segment matches zero or more whole segments. `a/**/b`
+  matches `a/b` and `a/x/y/b`; `src/**` matches every path under `src/` and
+  not `src` itself, because areas classify files; `**` matches every path.
+- A glob that is empty, starts with `/` or `./`, contains a `..` segment, ends
+  with `/`, or uses `[`, `]`, `{`, `}` or a leading `!` is an `areas-parse`
+  error. A `**` that is not a whole segment is one too.
+
+The conformance battery pins every case above.
+
+#### Detection is advisory
+
+`aval traits --detect` proposes areas from the files git tracks, and `aval
+traits --check` compares that proposal with the declaration. Neither filters
+anything: only a declaration does.
+
+The two ways detection can be wrong do not cost the same. A false positive
+costs one `disclaims` line. A false negative — or an area drawn too narrow —
+hides a constraint from the reader the hook exists for. So **detectors err
+toward reporting, and `disclaims` absorb the noise.** A detected trait is
+covered only **locally**: by an area or disclaim matching that package's own
+manifest path. Declaring a trait for one package does not cover another.
+
+Manifests are **scanned, never parsed**. A manifest shape a detector does not
+recognise can cost a detection, never a failure: `--check` exits `3` only when
+it could not inspect at all — git absent or failing, a file it could not read,
+a `package.json` that is not JSON.
+
+The detector set, what each detector looks for, and the findings `--check`
+prints are **advisory and unpinned** (§15). What `--check` pins is the meaning
+of its exit codes.
+
+`aval traits --summary` is what the hook prints. It reads only the corpus —
+registry, records, rules, packs — with no git, no detection and no
+subprocess, and works outside a repository. It prints whenever `areas`
+is declared, even when nothing is hidden, so an area that hides everything is
+visible at every session start rather than only in the diff that added it.
 
 ---
 
@@ -941,6 +1072,9 @@ answering a question.
 | `rules-parse` | a rules file whose frontmatter, heading grammar or statement is malformed (§2.4) |
 | `rule-id-unique` | one rule id declared twice, across every rules file and every vendored pack (§2.4) |
 | `rule-adopts-resolves` | `adopts` naming no record of this corpus's own (§2.4) |
+| `rule-applies-declared` | an `applies` name absent from the trait vocabulary (§2.5) |
+| `areas-declared` | an `areas` or `disclaims` trait absent from the trait vocabulary (§2.5) |
+| `areas-parse` | a malformed `areas` or `disclaims` glob or list (§2.5) |
 
 ### Layer B — verdicts
 
@@ -1115,6 +1249,9 @@ so §9's guarantee holds: there is no state `--write` cannot repair.
 - **No drift detection, waivers, or expiry.** application-landscape owns those.
   Duplicating them here would fork the metamodel its federation ADR exists to
   protect.
+  `traits --check` (§2.5) is not an exception: it compares a repository's
+  files with that repository's own declaration of what it is, and says
+  nothing about whether code follows a decision.
 
 ## 13. Provenance
 
@@ -1175,6 +1312,9 @@ Low codes follow the duro CLI. Verdicts start at 4.
 | `aval add --check [--quiet] [--budget S]` | A | `0` current or unknown · `1` behind or edited · `2` · `3` |
 | `aval keys` | A | `0` · `2` · `3` |
 | `aval rules` | A | `0` · `2` · `3` |
+| `aval traits [--summary]` | A | `0` · `2` · `3` |
+| `aval traits --detect` | A | `0` · `2` · `3` unreadable corpus, or could not inspect |
+| `aval traits --check` | A | `0` inspected, nothing to report · `1` findings · `2` · `3` unreadable corpus, or could not inspect |
 | `aval rule` | A | `0` found · `2` · `3` · `7` unknown |
 | `aval repos` | — | `0` · `2` · `3` nothing found, or the directory unreadable |
 | `--all-repos` on `resolve` / `keys` / `heads` / `history` / `rules` | A per member | `0` every member loaded, none exited 5 · `1` a member exited 5 or did not load · `2` with `--write`, `--check`, or on `show` or `rule` · `3` no member loaded |
@@ -1182,8 +1322,16 @@ Low codes follow the duro CLI. Verdicts start at 4.
 
 `hook install` reads no corpus and touches no layer. It wires a session-start
 hook that runs `heads`; whether the corpus resolves is that command's business,
-and the generated script stays **silent** when it does not, because a session
-must not fail over a tool the person who started it has not installed.
+and the generated script stays **silent** when aval is not installed, because a
+session must not fail over a tool the person who started it has not installed.
+When aval *is* installed and older than the aval that wrote the script, the
+script's first line says so, loudly, and names the upgrade: a registry written
+for a newer aval is refused by an older one (§15), and a session that silently
+lost every decision would read as a corpus that has none. When `heads` fails
+for any other reason the script prints one line saying it did and to run `aval
+check`, and the session continues. From 1.7.0 the script also prints `aval
+traits --summary` (§2.5), and reads rules with their stderr discarded, so the
+omission notice never becomes a counted rule line.
 
 The generated hook also runs `add --check --quiet --budget 5`, at most once an
 hour per repository, and prints what that reports only when it exits `1`. Its
@@ -1302,6 +1450,12 @@ book, and the book is what it will pick. `aval_rule` needs `repo` in a
 workspace because rule ids are corpus-local, as record ids are; `aval_rules`
 needs it for the size reason below.
 
+Both apply §2.5: `aval_rules` filters by R unless `all_traits` is set and then
+carries `omitted`, exactly as `aval rules --json` does; `aval_rule` never
+filters. `aval_traits` returns what `aval traits --json` does — the vocabulary,
+the areas, R and the disclaims — and never runs detection, which needs git and
+belongs to the CLI.
+
 `aval_relevant` is the retrieval tool (§5.1), and its description carries the
 heaviest obligation on the surface: it is the one tool whose result is **not**
 an answer. A model reading a ranked list will treat the first row as the answer
@@ -1391,6 +1545,25 @@ worked around: a pack carrying `rules:` is unreadable by aval before 1.2 —
 `pack-parses: unknown pack field` — which is the existing version gate doing
 what it exists to do, refusing a file it cannot fully understand rather than
 reading half of it.
+
+**1.7.0 is minor, by the same argument.** It adds four optional fields
+(`traits`, `areas`, `disclaims` in a registry, `applies` in a rule file), one
+command, one tool and three checks. `rule-applies-declared` needs an
+`applies`, and `areas-declared` and `areas-parse` need an `areas` or
+`disclaims`, so on a corpus that declares none of them no check can fire and no
+verdict moves. For a registry without `areas`, rule selection and every text
+rendering are unchanged; `--json` gains `applies` on a rule only when it is
+non-empty and `omitted` only when `areas` is declared. A pack declaring neither
+`traits` nor `applies` carries exactly what it did, and differs only in the
+version line naming the aval that wrote it. The forward limit is the one 1.2.0
+accepted: aval before 1.7 refuses a pack carrying `traits` or `applies` and a
+registry carrying `traits`, `areas` or `disclaims`. The hook says so rather
+than going silent (§14). **The detectors are not pinned** (§2.5): improving
+one may make `traits --check` report on a repository it passed before, and that
+is a patch, because what `--check` pins is what its exit codes mean, not which
+files earn a finding. It has no caller the rule above protects unless a
+repository wires it in, and the repository that does has asked for exactly
+that.
 
 **From 1.0 those words mean what semver says they mean.** Before it, a breaking
 change shipped as a minor bump, which is the 0.x convention — and is why §3.7's

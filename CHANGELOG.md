@@ -1,5 +1,65 @@
 # Changelog
 
+## v1.7.0
+
+### Added
+
+- **Traits: rules that apply only where the thing exists** (SEMANTICS §2.5).
+  A rule file may say `applies: [cli]`; a registry declares the vocabulary
+  (`traits:`, carried in its pack) and which parts of the repository have which
+  traits (`areas:`, glob → traits, consumer-local). With `areas` declared,
+  `aval rules`, the `aval_rules` tool and the session hook list only rules that
+  apply to the declared traits — a repository with no command line stops
+  printing command-line constraints at every session start.
+
+  Filtering is **display, never activity**. A hidden rule is still active,
+  `aval rule <id>` explains it, and `--all-traits` / `all_traits: true` lists
+  it. Every filtering surface **reports what it hid**: a stderr notice under
+  `aval rules`, `omitted` (`constraints`, `heuristics`, `traits`) in every
+  `--json` and tool payload, and one hook line printed whenever `areas` is
+  declared, zeros included — so an area that hides everything is seen at every
+  session start, not only in the diff that added it. A path no area covers
+  filters nothing; an area declaring `[]` keeps only untargeted rules.
+- **`aval traits`**: the declaration (`--json`, and the `aval_traits` tool);
+  `--summary`, the hook's line, which reads the corpus only and needs no git;
+  `--detect`, which proposes `areas:` from tracked files; and `--check`, which
+  reports a detected trait no area or disclaim covers **for that package**,
+  and any glob matching no tracked file. `--check` exits `0` / `1` findings /
+  `3` could not inspect — git missing or failing, an unreadable file, a
+  `package.json` that is not JSON. A TOML manifest is scanned, never parsed,
+  and never exit `3`.
+
+  Detection is advisory and **unpinned**: it leans toward reporting (a false
+  positive costs a `disclaims:` line; a miss would hide a constraint), and a
+  detector getting better is a patch. Today it knows `cli` (Cargo bins,
+  `package main` outside `//go:build ignore`, Python script tables, a
+  `package.json` `bin`) and `ui` (React, Vue, Svelte, Solid, Preact, Angular,
+  Lit in `dependencies` or `peerDependencies`, or `.tsx`/`.jsx`/`.vue`/
+  `.svelte` files).
+- **Three checks**, each firing only where the new fields are present:
+  `rule-applies-declared`, `areas-declared`, `areas-parse`.
+- **The glob dialect is normative** and pinned by `conformance/traits.json`,
+  with the applicability table beside it.
+
+### Changed
+
+- **The hook speaks where it used to go silent.** When the installed aval is
+  older than the one that wrote the script, its first line says so and names
+  the upgrade; when `aval heads` fails on a repository that has a registry, one
+  line says so and to run `aval check`. Without aval installed it still says
+  nothing.
+
+### Upgrading
+
+- `brew upgrade aval` on every workstation **before** a repository adopts
+  `traits`, `areas` or `disclaims`: aval before 1.7 refuses such a registry,
+  and a pack carrying `traits` or `applies`.
+- Everybody re-runs `aval hook install` (the script changed); bump each
+  workflow's `AVAL_VERSION` pin in the same pull request.
+- Order: release the tool, publish the producer pack with `traits` and
+  `applies`, then let each consumer `aval add` and commit its reviewed
+  `areas:` together.
+
 ## v1.6.0
 
 ### Added

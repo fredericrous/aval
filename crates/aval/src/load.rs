@@ -670,6 +670,7 @@ fn merge_declarations(
                 reg.scopes.push(s.clone());
             }
         }
+        reg.adopt_pack_traits(&p.traits);
         for pk in &p.keys {
             match reg.keys.iter_mut().find(|k| k.name == pk.name) {
                 None => reg.keys.push(pk.clone()),

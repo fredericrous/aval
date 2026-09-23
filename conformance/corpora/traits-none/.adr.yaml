@@ -1,0 +1,13 @@
+# The traits-sample corpus with no `areas`: nothing is filtered.
+dir: docs/adr
+traits: [cli, ui, data]
+rules:
+  - docs/principles/cli.md
+  - docs/principles/ui.md
+  - docs/principles/data.md
+  - docs/principles/any.md
+  - docs/principles/general.md
+scopes: []
+keys:
+  code.practice:
+    description: Which practices first-party code follows

@@ -4,6 +4,10 @@
 query, and the expected result. The harness rules are in the file's own
 `description` header.
 
+`traits.json` is the third: the glob dialect of `areas:` and the
+applicability table of SEMANTICS section 2.5, case by case, including the
+`omitted` report every filtering surface carries.
+
 `relevant.json` is the second one, for the ranking `aval relevant` produces.
 It is a separate file because it asserts a different kind of thing: not what is
 true, but what a *suggestion* says about it — that the order is reproducible
@@ -19,6 +23,8 @@ own, `undecided` and `contradiction` included. Its rules are in its own header.
 | `contradiction` | the same corpus without the reconciliation, so competing heads are observable |
 | `retire-scoped` | a scope opting out of an inherited default |
 | `rules-sample` | rules: two constraints and a heuristic under a live record, one under a draft, one under a replaced record — so every reason a rule can be inactive has an instance |
+| `traits-sample` | traits: one rule per targeting shape (a trait, another trait, a trait no area names, `applies: []`, no `applies`) and one area per row of the applicability table — overlapping, `[]`, uncovered |
+| `traits-none` | the same rules with no `areas`, so nothing is filtered and nothing reports that it was |
 | `relevance-sample` | relevance: a replaced record whose title still says what the key is about, a record naming a literal path and a glob, a key decided only at a scope, a key declared and undecided, and a rule to rank beside them |
 
 `homelab-sample` is converted from `homelab/docs/adr`. The frontmatter is a

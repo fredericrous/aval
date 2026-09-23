@@ -259,7 +259,7 @@ fn an_unreadable_corpus_is_reported_and_does_not_stop_the_server() {
     let tools = result(&replies[0]).get("tools").and_then(|t| t.as_arr());
     assert_eq!(
         tools.map(<[Json]>::len),
-        Some(9),
+        Some(10),
         "tools/list must still answer"
     );
 
@@ -571,7 +571,7 @@ fn every_tool_is_declared_read_only() {
         .get("tools")
         .and_then(|t| t.as_arr())
         .expect("tools");
-    assert_eq!(tools.len(), 9);
+    assert_eq!(tools.len(), 10);
     for t in tools {
         let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("");
         assert!(name.starts_with("aval_"), "{} needs the prefix", name);
@@ -693,6 +693,68 @@ fn the_rule_tools_answer_what_the_cli_answers() {
     // would help a client fix it.
     assert_eq!(err_code(&replies[4]), -32602);
     assert_eq!(err_code(&replies[5]), -32602);
+}
+
+/// Traits on the tool surface: `aval_rules` filters and reports `omitted`
+/// exactly as `aval rules --json` does, `all_traits` lifts the filter, and
+/// `aval_traits` is byte-equal to `aval traits --json`.
+#[test]
+fn the_traits_tools_answer_what_the_cli_answers() {
+    let r = corpus("traits");
+    write(
+        &r,
+        ".adr.yaml",
+        &format!(
+            "{}traits: [cli, ui]\nrules:\n  - docs/p/cli.md\nareas:\n  \"web/**\": [ui]\n",
+            REGISTRY
+        ),
+    );
+    write(
+        &r,
+        "docs/p/cli.md",
+        "---\nadopts: ADR-0001\napplies: [cli]\n---\n\
+         ## cli.exit [constraint]\n\nUsage errors exit 2.\n",
+    );
+    let replies = exchange(
+        &r,
+        &[
+            &call("aval_rules", "{}"),
+            &call("aval_rules", r#"{"all_traits":true}"#),
+            &call("aval_traits", "{}"),
+            &call("aval_rules", r#"{"all_traits":"yes"}"#),
+        ],
+    );
+    let (filtered, is_err) = tool_result(&replies[0]);
+    assert!(!is_err);
+    assert_eq!(
+        filtered
+            .get("rules")
+            .and_then(|x| x.as_arr())
+            .map(<[Json]>::len),
+        Some(0)
+    );
+    assert_eq!(
+        filtered.get("omitted").map(|o| o.to_string()),
+        Some(r#"{"constraints":1,"heuristics":0,"traits":["ui"]}"#.to_string())
+    );
+    assert_eq!(
+        content(&replies[0], 0).trim(),
+        cli(&r, &["rules", "--json"]).trim()
+    );
+    let (all, _) = tool_result(&replies[1]);
+    assert_eq!(
+        all.get("rules").and_then(|x| x.as_arr()).map(<[Json]>::len),
+        Some(1)
+    );
+    assert_eq!(
+        content(&replies[1], 0).trim(),
+        cli(&r, &["rules", "--json", "--all-traits"]).trim()
+    );
+    assert_eq!(
+        content(&replies[2], 0).trim(),
+        cli(&r, &["traits", "--json"]).trim()
+    );
+    assert_eq!(err_code(&replies[3]), -32602);
 }
 
 #[test]
