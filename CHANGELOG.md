@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.7.1
+
+### Fixed
+
+- **The generated hook is `shellcheck`-clean again.** 1.7.0's two new
+  messages put backticks inside single-quoted `printf` formats (SC2016), and
+  consumers run shellcheck over `.claude/hooks/aval-heads.sh` at pre-commit, so
+  re-installing the hook was blocked. A test now runs shellcheck over the
+  script whenever it is installed. The stale-binary line also names both ways
+  aval is installed — `brew upgrade aval`, or its install script — not brew
+  alone.
+
 ## v1.7.0
 
 ### Added
