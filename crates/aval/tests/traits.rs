@@ -630,3 +630,58 @@ fn a_prettier_single_quoted_area_key_is_the_same_glob() {
         .out
         .starts_with("traits here: ui"));
 }
+
+/// `--detect` is how a repository learns what to declare, so it runs before
+/// there is a registry: it reads the repository git names and proposes
+/// against an empty vocabulary. Every other mode still needs a corpus.
+#[test]
+fn detect_runs_before_there_is_a_registry() {
+    // Under the system temp dir: this repository has a registry of its own.
+    let r = std::env::temp_dir().join(format!("aval-no-registry-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&r);
+    fs::create_dir_all(&r).unwrap();
+    write(&r, "Cargo.toml", "[package]\nname = \"x\"\n");
+    write(&r, "src/main.rs", "fn main() {}\n");
+    track(&r);
+    let got = run(&r.join("src"), &["traits", "--detect"]);
+    assert_eq!(got.code, 0, "{}", got.err);
+    assert!(got.out.contains("\"**\": [cli]"), "{}", got.out);
+    assert!(
+        got.out.contains("not in the vocabulary: cli"),
+        "{}",
+        got.out
+    );
+    assert_eq!(run(&r, &["traits", "--check"]).code, 3);
+}
+
+/// `relevant --path web` names a directory, and `web/**` covers it. 1.7.x
+/// compared the glob against the literal path `web`, found nothing, and
+/// treated the directory as uncovered, so nothing was filtered.
+#[test]
+fn a_directory_path_is_covered_by_the_area_beneath_it() {
+    let r = corpus("dir-path", "areas:\n  \"web/**\": [ui]\n");
+    write(&r, "web/app.tsx", "export {}\n");
+    let got = run(
+        &r,
+        &["relevant", "--path", "web", "--text", "exit", "--json"],
+    );
+    assert_eq!(got.code, 0, "{}", got.err);
+    assert!(
+        got.out
+            .contains("\"omitted\":{\"constraints\":1,\"heuristics\":1,\"traits\":[\"ui\"]}"),
+        "{}",
+        got.out
+    );
+    // A directory no area reaches is still uncovered: nothing filtered.
+    write(&r, "docs/readme.md", "x\n");
+    let got = run(
+        &r,
+        &["relevant", "--path", "docs", "--text", "exit", "--json"],
+    );
+    assert!(
+        got.out
+            .contains("\"omitted\":{\"constraints\":0,\"heuristics\":0,\"traits\":[]}"),
+        "{}",
+        got.out
+    );
+}

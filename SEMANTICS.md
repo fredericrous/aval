@@ -175,6 +175,11 @@ packs:
   written by an earlier version keeps loading, so a listed path is never wrong
   for its extension — and `aval add` migrates such a file, moving it and
   rewriting the one registry line that names it.
+- In a repository with no registry, `aval add` writes a starter one at the
+  repository's root — git's top level, else the directory asked — declaring
+  nothing, and lists the pack in it. Adopting another repository's decisions
+  is the first thing a repository does with this tool, so "no registry yet"
+  is the ordinary case, not a refusal. `--dry-run` says it would.
 - A pack file is written by `aval add` and MUST NOT be edited by hand. What it
   **declares** is what the producing repository published at the recorded
   commit, under a comment banner naming the source, the revision asked for,
@@ -544,6 +549,7 @@ a name with T. R is the union of the traits of every declared area.
 | a path matching several areas | the union of their traits |
 | a path matching an area that declares `[]` | the empty set: only untargeted rules apply there |
 | a path matching no area | nothing is filtered for that path |
+| a directory (`relevant --path web`) | the union of every area that matches anything beneath it; none matching is the row above |
 | several paths queried | a rule is kept when it applies to **any** of them, and omitted only when every one hides it |
 
 An uncovered path filters nothing on purpose. Declaring `web/**` must not
@@ -554,7 +560,9 @@ active (§2.4). `aval rule <id>` explains it whatever the areas say, and `aval
 rules --all-traits` lists everything. **Every surface that filters reports what
 it hid**, as `omitted`: the number of constraints and of heuristics removed by
 traits alone, counted after every other filter the caller asked for (level,
-adopting record, activity), and the traits in force. The field is present
+adopting record, activity), and the traits the listing was filtered by —
+empty when traits filtered nothing, because a queried path is in no area or
+every trait was asked for. The field is present
 whenever `areas` is declared, zeros included, and absent otherwise. Absence
 from a filtered list is not evidence (§5.1), and a list that did not say it
 was filtered would be read as complete.
@@ -585,6 +593,10 @@ The conformance battery pins every case above.
 `aval traits --detect` proposes areas from the files git tracks, and `aval
 traits --check` compares that proposal with the declaration. Neither filters
 anything: only a declaration does.
+
+`--detect` also runs where there is no registry yet — against the repository
+git names, with an empty vocabulary — because it is how a repository learns
+what to declare. Every other `traits` mode needs a corpus.
 
 The two ways detection can be wrong do not cost the same. A false positive
 costs one `disclaims` line. A false negative — or an area drawn too narrow —

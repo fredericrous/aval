@@ -589,7 +589,20 @@ pub fn relevant_in(l: &Loaded, q: &Query) -> Reply {
     // Only rules that apply to the paths asked about (SEMANTICS section 2.5):
     // kept when they apply to any of them, and every rule when one of them is
     // in no area. What traits left out is reported, never silently dropped.
-    let (active, omitted) = applicability::filter(reg, &Scope::for_query(reg, &paths), active);
+    // A directory asks about everything beneath it, which is how an area
+    // glob answers it: marked with a trailing `/` for `path_traits`.
+    let scope_paths: Vec<String> = paths
+        .iter()
+        .map(|p| {
+            if l.root.join(p).is_dir() {
+                format!("{}/", p)
+            } else {
+                p.clone()
+            }
+        })
+        .collect();
+    let (active, omitted) =
+        applicability::filter(reg, &Scope::for_query(reg, &scope_paths), active);
     let rule_index = Index::build(rule_docs(&active));
     let mut rules: Vec<(&Rule, f64)> = active
         .iter()

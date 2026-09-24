@@ -417,6 +417,19 @@ fn relist(root: &Path, from: &str, to: &str) -> Result<Listed, String> {
 /// a person wrote and rewriting it would lose their comments and their
 /// ordering to make room for one line. An inline list stays inline and a block
 /// list stays a block: the shape is theirs too.
+/// What `aval add` writes when a repository has no registry yet. Everything
+/// else is the repository's to declare; `add` then lists the pack below it.
+pub const STARTER_REGISTRY: &str = "\
+# The decision registry. `aval add` created it to vendor a pack of decisions
+# made elsewhere; this repository keeps no records of its own yet.
+#
+# Declare `keys` (and a `dir` for records) the day it has a question the pack
+# does not answer, and `areas:` for which parts of it are a command line or a
+# UI — `aval traits --detect` proposes them.
+scopes: []
+keys:
+";
+
 fn register(root: &Path, rel: &str) -> Result<Listed, String> {
     let path = root.join(load::REGISTRY);
     let src = std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", load::REGISTRY, e))?;

@@ -54,6 +54,22 @@ pub struct Detection {
     pub evidence: String,
 }
 
+/// Where a repository without a registry is rooted: git's top level, or the
+/// directory asked when git has none to name.
+pub fn repository_root(from: &Path) -> std::path::PathBuf {
+    Command::new("git")
+        .arg("-C")
+        .arg(from)
+        .args(["rev-parse", "--show-toplevel"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| std::path::PathBuf::from(String::from_utf8_lossy(&o.stdout).trim().to_string()))
+        .unwrap_or_else(|| from.to_path_buf())
+}
+
 /// Every tracked path under `root`, relative to it.
 ///
 /// NUL-delimited so a path with a newline or a quote is one path, and with

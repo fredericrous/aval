@@ -95,7 +95,7 @@
       "query": { "paths": ["scripts/release.sh"] },
       "expected": {
         "kept": ["any.one", "cli.one", "cli.two", "data.one", "general.one", "ui.one"],
-        "omitted": { "constraints": 0, "heuristics": 0, "traits": ["cli", "ui"] }
+        "omitted": { "constraints": 0, "heuristics": 0, "traits": [] }
       }
     },
     {
@@ -104,7 +104,7 @@
       "query": { "paths": ["web/app.tsx", "scripts/release.sh"] },
       "expected": {
         "kept": ["any.one", "cli.one", "cli.two", "data.one", "general.one", "ui.one"],
-        "omitted": { "constraints": 0, "heuristics": 0, "traits": ["cli", "ui"] }
+        "omitted": { "constraints": 0, "heuristics": 0, "traits": [] }
       }
     },
     {

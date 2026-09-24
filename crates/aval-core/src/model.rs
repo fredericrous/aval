@@ -398,6 +398,11 @@ pub struct Registry {
     pub traits: Vec<String>,
     /// The trait vocabulary contributed by vendored packs.
     pub pack_traits: Vec<String>,
+    /// Scopes that only a vendored pack declares. They are in `scopes` too —
+    /// that list is the vocabulary in force — and are recorded here so a
+    /// producer's published pack can leave them out: a pack MUST NOT
+    /// re-export what it vendored (SEMANTICS section 2.3).
+    pub pack_scopes: Vec<String>,
     /// Which parts of this repository have which traits. Consumer-local:
     /// never written to, or read from, a pack.
     pub areas: Vec<Area>,
@@ -442,6 +447,7 @@ impl Registry {
             keys: Vec::new(),
             traits: Vec::new(),
             pack_traits: Vec::new(),
+            pack_scopes: Vec::new(),
             areas: Vec::new(),
             disclaims: Vec::new(),
         }

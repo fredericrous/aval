@@ -771,3 +771,37 @@ fn the_generated_script_is_shellcheck_clean() {
         String::from_utf8_lossy(&got.stdout)
     );
 }
+
+/// Prereleases order the way semver says. A script written by this release's
+/// own `-rc1` is older than the release, so it must not warn; one written by
+/// the next patch's `-rc1` is newer, so it must. 1.7.x compared the numeric
+/// core only and got the first one backwards.
+#[test]
+fn a_prerelease_writer_is_ordered_by_semver() {
+    let v = env!("CARGO_PKG_VERSION");
+    let r = scratch("prerelease-writer");
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    let p = r.join(".claude/hooks/aval-heads.sh");
+    let s = fs::read_to_string(&p).unwrap();
+
+    fs::write(&p, s.replacen(v, &format!("{}-rc1", v), 1)).unwrap();
+    assert!(
+        !sh(&r, Some(&path_with_aval())).out.contains("OLDER THAN"),
+        "{}-rc1 is older than {}",
+        v,
+        v
+    );
+
+    let mut parts: Vec<u64> = v.split('.').map(|x| x.parse().unwrap()).collect();
+    parts[2] += 1;
+    let next = format!("{}.{}.{}-rc1", parts[0], parts[1], parts[2]);
+    fs::write(&p, s.replacen(v, &next, 1)).unwrap();
+    assert!(
+        sh(&r, Some(&path_with_aval()))
+            .out
+            .starts_with(&format!("AVAL {} IS OLDER THAN THIS HOOK", v)),
+        "{} is older than {}",
+        v,
+        next
+    );
+}

@@ -4,11 +4,11 @@ version = 3
 
 [[package]]
 name = "aval"
-version = "1.7.2"
+version = "1.8.0"
 dependencies = [
  "aval-core",
 ]
 
 [[package]]
 name = "aval-core"
-version = "1.7.2"
+version = "1.8.0"
