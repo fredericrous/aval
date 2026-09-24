@@ -613,3 +613,20 @@ fn modes_are_exclusive() {
     assert_eq!(run(&r, &["traits", "--detect", "--check"]).code, 2);
     assert_eq!(run(&r, &["traits", "extra"]).code, 2);
 }
+
+/// prettier with `singleQuote: true` rewrites `"web/**"` as `'web/**'` at
+/// pre-commit. 1.7.1 read that key with its quotes on and refused the glob;
+/// a formatted registry must mean what the unformatted one meant.
+#[test]
+fn a_prettier_single_quoted_area_key_is_the_same_glob() {
+    let r = corpus(
+        "single-quoted",
+        "areas:\n  'web/**': [ui]\ndisclaims:\n  'tools/**': [cli]\n",
+    );
+    let got = run(&r, &["rules", "--level", "constraint"]);
+    assert_eq!(got.code, 0, "{}", got.err);
+    assert!(!got.out.contains("cli.exit"), "{}", got.out);
+    assert!(run(&r, &["traits", "--summary"])
+        .out
+        .starts_with("traits here: ui"));
+}

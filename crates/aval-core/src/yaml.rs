@@ -15,6 +15,7 @@
 //!   last-wins rule is how `decisions` would have quietly lost an entry had it
 //!   been a mapping instead of a list.
 
+use std::borrow::Cow;
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -411,18 +412,46 @@ fn is_map_entry(s: &str) -> bool {
     }
 }
 
-fn split_key(s: &str) -> Option<(&str, &str)> {
+/// A mapping key and the text after its colon.
+///
+/// Keys may be plain, double-quoted or single-quoted. Single quotes are
+/// prettier's choice under `singleQuote: true`, and prettier formats a
+/// consumer's `.adr.yaml` at pre-commit: an `areas:` glob such as
+/// `"packages/ui/**"` comes back as `'packages/ui/**'`. Reading that key with
+/// its quotes still on made the glob malformed (1.7.1). Inside single quotes
+/// `''` is one quote, as YAML says; that is the only escape the style has.
+fn split_key(s: &str) -> Option<(Cow<'_, str>, &str)> {
     if let Some(rest) = s.strip_prefix('"') {
         let end = rest.find('"')?;
         let after = rest[end + 1..].trim_start();
         return after
             .strip_prefix(':')
-            .map(|v| (&rest[..end], v.trim_start()));
+            .map(|v| (Cow::Borrowed(&rest[..end]), v.trim_start()));
+    }
+    if let Some(rest) = s.strip_prefix('\'') {
+        let b = rest.as_bytes();
+        let mut j = 0;
+        let end = loop {
+            match b.get(j) {
+                None => return None,
+                Some(b'\'') if b.get(j + 1) == Some(&b'\'') => j += 2,
+                Some(b'\'') => break j,
+                Some(_) => j += 1,
+            }
+        };
+        let after = rest[end + 1..].trim_start();
+        let key = &rest[..end];
+        let key = if key.contains("''") {
+            Cow::Owned(key.replace("''", "'"))
+        } else {
+            Cow::Borrowed(key)
+        };
+        return after.strip_prefix(':').map(|v| (key, v.trim_start()));
     }
     let b = s.as_bytes();
     for (i, c) in b.iter().enumerate() {
         if *c == b':' && (i + 1 == b.len() || b[i + 1] == b' ') {
-            return Some((s[..i].trim_end(), s[i + 1..].trim_start()));
+            return Some((Cow::Borrowed(s[..i].trim_end()), s[i + 1..].trim_start()));
         }
     }
     None
@@ -578,6 +607,15 @@ pub fn split_frontmatter(src: &str) -> Option<(String, usize, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_quoted_keys_are_keys() {
+        let n = parse("areas:\n  'packages/ui/**': [ui]\n  \"cmd/**\": [cli]\n  'it''s': []\n")
+            .expect("parses");
+        let m = n.get("areas").and_then(|a| a.as_map()).expect("map");
+        let keys: Vec<&str> = m.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, vec!["packages/ui/**", "cmd/**", "it's"]);
+    }
 
     fn p(s: &str) -> Node {
         parse(s).expect("parses")
