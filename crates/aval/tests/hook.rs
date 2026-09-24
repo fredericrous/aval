@@ -569,7 +569,18 @@ fn the_hook_is_silent_when_aval_is_absent() {
 /// Reporting a broken corpus is the gate's job.
 #[test]
 fn the_hook_is_silent_without_a_corpus() {
-    let r = scratch("no-corpus");
+    // Outside this repository, which has a corpus of its own since it
+    // vendored the fleet pack: `aval heads` walks up from a directory under
+    // `target/` and answers from that one, and the hook is then right to
+    // speak. "No corpus" has to mean none anywhere above.
+    let r = std::env::temp_dir().join(format!("aval-hook-no-corpus-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&r);
+    fs::create_dir_all(&r).unwrap();
+    fs::write(
+        r.join(".adr.yaml"),
+        "dir: docs/adr\nscopes: []\nkeys:\n  a.b:\n",
+    )
+    .unwrap();
     assert_eq!(run(&r, &["hook", "install"]).code, 0);
     fs::remove_file(r.join(".adr.yaml")).unwrap();
 
@@ -580,6 +591,7 @@ fn the_hook_is_silent_without_a_corpus() {
     );
     assert_eq!(got.code, 0);
     assert_eq!(got.out, "", "{}", got.out);
+    let _ = fs::remove_dir_all(&r);
 }
 
 #[test]
