@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.7.2
+
+### Fixed
+
+- **Single-quoted mapping keys are keys.** prettier with `singleQuote: true`
+  rewrites an `areas:` glob such as `"packages/ui/**"` as
+  `'packages/ui/**'` when it formats `.adr.yaml` at pre-commit, and 1.7.1 read
+  that key with its quotes still on, so every glob came back malformed
+  (`areas-parse`) and the registry stopped loading. Single-quoted keys now
+  read as YAML says, `''` included. Found adopting the fleet pack in
+  duro-design-system.
+
 ## v1.7.1
 
 ### Fixed
