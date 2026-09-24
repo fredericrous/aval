@@ -668,6 +668,7 @@ fn merge_declarations(
         for s in &p.scopes {
             if !reg.scopes.contains(s) {
                 reg.scopes.push(s.clone());
+                reg.pack_scopes.push(s.clone());
             }
         }
         reg.adopt_pack_traits(&p.traits);

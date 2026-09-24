@@ -755,6 +755,7 @@ mod tests {
                 }],
                 traits: Vec::new(),
                 pack_traits: Vec::new(),
+                pack_scopes: Vec::new(),
                 areas: Vec::new(),
                 disclaims: Vec::new(),
             },

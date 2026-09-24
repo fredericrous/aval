@@ -36,11 +36,20 @@ pub fn repo_traits(reg: &Registry) -> Option<Vec<String>> {
 
 /// The traits of one path: the union of every area matching it, or `None`
 /// when no area matches (or none is declared) and nothing is filtered for it.
+///
+/// A path ending in `/` is a directory, and an area applies to it when it
+/// matches anything beneath it: `--path web` is covered by `web/**`, which
+/// matched no file literally named `web`.
 pub fn path_traits(reg: &Registry, path: &str) -> Option<Vec<String>> {
+    let dir = path.strip_suffix('/');
     let mut hit = false;
     let mut v: Vec<String> = Vec::new();
     for a in &reg.areas {
-        if glob::matches(&a.glob, path) {
+        let covers = match dir {
+            Some(d) => glob::matches_under(&a.glob, d),
+            None => glob::matches(&a.glob, path),
+        };
+        if covers {
             hit = true;
             v.extend(a.traits.iter().cloned());
         }
@@ -115,7 +124,8 @@ impl Scope {
 pub struct Omitted {
     pub constraints: usize,
     pub heuristics: usize,
-    /// The traits in force when the listing was filtered.
+    /// The traits the listing was filtered by; empty when traits filtered
+    /// nothing (a queried path in no area, or every trait asked for).
     pub traits: Vec<String>,
 }
 
@@ -152,10 +162,10 @@ pub fn filter<'a>(
     if reg.areas.is_empty() {
         return (rules, None);
     }
-    let mut om = Omitted::new(match scope {
-        Scope::All => repo_traits(reg).unwrap_or_default(),
-        s => s.traits(),
-    });
+    // The traits the listing was filtered BY. When nothing was filtered —
+    // a queried path in no area, or `--all-traits` — that is none, and
+    // naming the repository's traits there read as a filter that never ran.
+    let mut om = Omitted::new(scope.traits());
     let mut kept = Vec::new();
     for r in rules {
         if scope.keeps(r) {
@@ -256,6 +266,15 @@ mod tests {
             Scope::for_query(&r, &s(&["web/a.tsx", "scripts/x.sh"])),
             Scope::All
         );
+    }
+
+    #[test]
+    fn a_directory_takes_the_areas_under_it() {
+        let r = reg(&[("web/**", &["ui"]), ("cmd/**", &["cli"])]);
+        assert_eq!(path_traits(&r, "web/"), Some(s(&["ui"])));
+        assert_eq!(path_traits(&r, "web"), None);
+        assert_eq!(path_traits(&r, "docs/"), None);
+        assert_eq!(path_traits(&r, "/"), Some(s(&["cli", "ui"])));
     }
 
     #[test]

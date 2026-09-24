@@ -933,3 +933,68 @@ fn a_pack_never_re_exports_what_it_borrowed() {
         published.out
     );
 }
+
+/// A consumer that also publishes publishes its own scopes only. The fleet's
+/// `effect-stack` arrived with the vendored pack and is in the vocabulary in
+/// force, but re-exporting it would hand this consumer's consumers a scope
+/// from a pack they never vendored (SEMANTICS section 2.3).
+#[test]
+fn a_published_pack_does_not_re_export_vendored_scopes() {
+    let p = producer("rexport-producer");
+    let c = consumer_with_corpus("rexport-consumer");
+    assert_eq!(run(&c, &["add", &src(&p)]).code, 0);
+    assert_eq!(run(&c, &["heads", "--write"]).code, 0);
+    assert_eq!(run(&c, &["pack", "--write"]).code, 0);
+    let published = fs::read_to_string(c.join("aval.pack")).unwrap();
+    let scopes = published.split("keys:").next().unwrap_or("");
+    assert!(!scopes.contains("effect-stack"), "{}", published);
+
+    // …unless this corpus itself decides at it: then the scope is part of
+    // what it publishes, or its own record would name an undeclared scope.
+    write(
+        &c,
+        "docs/adr/0002-sql-here.md",
+        &record(
+            "ADR-0002",
+            "app.router",
+            Some("effect-stack"),
+            "React Router, here too",
+            "first: true",
+        ),
+    );
+    assert_eq!(run(&c, &["heads", "--write"]).code, 0);
+    assert_eq!(run(&c, &["pack", "--write"]).code, 0);
+    let published = fs::read_to_string(c.join("aval.pack")).unwrap();
+    let scopes = published.split("keys:").next().unwrap_or("");
+    assert!(scopes.contains("effect-stack"), "{}", published);
+}
+
+/// Adopting the fleet is `aval add` in a repository that has no registry yet.
+/// It used to refuse; it now writes a starter registry at the git top level —
+/// not in the subdirectory it was run from — and lists the pack in it, so
+/// the corpus resolves straight away.
+#[test]
+fn add_creates_the_registry_it_vendors_into() {
+    let p = producer("starter-producer");
+    // Under the system temp dir, not `target/`: this repository has a
+    // registry of its own, and walking up from `target/` would find it.
+    let c = std::env::temp_dir().join(format!("aval-starter-consumer-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&c);
+    fs::create_dir_all(c.join("src/deep")).unwrap();
+    git_init(&c);
+
+    let dry = run(&c.join("src/deep"), &["add", &src(&p), "--dry-run"]);
+    assert_eq!(dry.code, 0, "{}", dry.all());
+    assert!(dry.all().contains("would be created"), "{}", dry.all());
+    assert!(!c.join(".adr.yaml").exists());
+
+    let got = run(&c.join("src/deep"), &["add", &src(&p)]);
+    assert_eq!(got.code, 0, "{}", got.all());
+    assert!(got.all().contains("created"), "{}", got.all());
+    assert!(c.join(".adr.yaml").is_file());
+    assert!(!c.join("src/deep/.adr.yaml").exists());
+    let reg = fs::read_to_string(c.join(".adr.yaml")).unwrap();
+    assert!(reg.contains(".adr/packs/"), "{}", reg);
+    assert_eq!(run(&c, &["check"]).code, 0);
+    assert_eq!(run(&c, &["resolve", "release.trigger"]).code, 0);
+}

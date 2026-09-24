@@ -1,5 +1,40 @@
 # Changelog
 
+## v1.8.0
+
+### Added
+
+- **`aval add` creates the registry it vendors into.** Adopting another
+  repository's decisions is the first thing a repository does with aval, and
+  `add` used to refuse it: "no .adr.yaml … there has to be one". With no
+  registry anywhere above, it now writes a starter one at the git top level
+  (else the directory asked), declaring nothing, and lists the pack in it.
+  `--dry-run` says it would.
+- **`aval traits --detect` runs before there is a registry**, against the
+  repository git names and an empty vocabulary, because it is how a
+  repository learns which `areas:` to declare. Every other `traits` mode
+  still needs a corpus.
+
+### Fixed
+
+- **A published pack no longer re-exports vendored scopes.** Keys, records
+  and rules a corpus vendored were already left out of its `aval.pack`; the
+  scopes those packs declared were not, so a consumer's consumers received
+  a scope from a pack they never vendored (SEMANTICS §2.3 forbids it). A
+  borrowed scope is kept only where this corpus's own key or record uses it.
+  No repository in the fleet both publishes and vendors today.
+- **`aval relevant --path <directory>`** is covered by the areas beneath it:
+  `--path web` takes `web/**`'s traits. The glob was compared with the
+  literal path `web`, matched nothing, and the directory was treated as
+  uncovered, so nothing was filtered.
+- **`omitted.traits` names only traits that filtered.** For a queried path in
+  no area, or `--all-traits`, it listed the repository's traits although
+  nothing was filtered; it is now empty there.
+- **The hook orders prereleases by semver.** It compared the numeric core
+  only, so a script written by `1.8.0-rc1` called a `1.8.0` binary older
+  than itself. Release beats its prereleases; two prereleases of one core
+  compare by text.
+
 ## v1.7.2
 
 ### Fixed

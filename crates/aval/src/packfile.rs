@@ -48,6 +48,28 @@ pub fn render(l: &Loaded) -> String {
             .iter()
             .any(|p| p.keys.iter().any(|pk| pk.name == k.name))
     });
+    // Scopes too, and after the keys, so a vendored key's restriction is not
+    // mistaken for a use. `registry.scopes` is the vocabulary in force, the
+    // packs' included; publishing it whole handed a consumer's consumers the
+    // scopes of a pack they never vendored. A borrowed scope stays only where
+    // this corpus's own declarations use it — a local key restricted to it,
+    // or a local record deciding at it — because a published key or record
+    // naming an undeclared scope is a pack nobody can load.
+    let borrowed = own.registry.pack_scopes.clone();
+    let used: Vec<String> = own
+        .registry
+        .keys
+        .iter()
+        .flat_map(|k| k.scopes.iter().flatten().cloned())
+        .chain(
+            own.adrs
+                .iter()
+                .flat_map(|a| a.decisions.iter().map(|e| e.scope.clone())),
+        )
+        .collect();
+    own.registry
+        .scopes
+        .retain(|s| !borrowed.contains(s) || used.contains(s));
     pack::render(&own)
 }
 

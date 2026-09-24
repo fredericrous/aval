@@ -608,6 +608,31 @@ fn cmd_traits(args: &Args) -> i32 {
         eprintln!("aval: `traits` describes one repository; use -C <repo>");
         return E_USAGE;
     }
+    // `--detect` is how a repository finds out what to declare, so it must
+    // work before there is a registry to declare it in: with none, it reads
+    // the repository git names and proposes against an empty vocabulary.
+    if args.detect {
+        if let Err(load::LoadError::NoRegistry(_)) = load::load(&args.dir) {
+            let root = aval::traits::repository_root(&args.dir);
+            let found = match aval::traits::tracked(&root)
+                .and_then(|files| aval::traits::detect(&root, &files))
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    emit_error(args, E_INVALID, &e.to_string(), &[]);
+                    return E_INVALID;
+                }
+            };
+            let empty = aval_core::model::Registry::empty("");
+            if args.json {
+                println!("{}", aval::traits::detect_json(&found));
+            } else {
+                print!("{}", aval::traits::detect_text(&empty, &found));
+                let _ = std::io::stdout().flush();
+            }
+            return 0;
+        }
+    }
     let l = match loaded(args) {
         Ok(l) => l,
         Err(c) => return c,
@@ -1200,16 +1225,23 @@ fn cmd_add(args: &Args) -> i32 {
         eprintln!("aval: `--as` names one pack; add them one at a time");
         return E_USAGE;
     }
+    // No registry yet is the ordinary first step, not an error: vendoring
+    // the fleet's decisions is how a repository adopts them. The registry is
+    // created at the repository's root — the git top level, else the
+    // directory asked — holding only what `add` then fills in.
+    let mut created = None;
     let root = match load::find_root(&args.dir) {
         Some(r) => r,
         None => {
-            eprintln!(
-                "aval: no {} in {} or any parent directory — a pack is vendored \
-                 into a corpus, so there has to be one",
-                load::REGISTRY,
-                args.dir.display()
-            );
-            return E_INVALID;
+            let root = aval::traits::repository_root(&args.dir);
+            if !args.dry_run {
+                if let Err(e) = std::fs::write(root.join(load::REGISTRY), add::STARTER_REGISTRY) {
+                    eprintln!("aval: {}: {}", root.join(load::REGISTRY).display(), e);
+                    return E_FAIL;
+                }
+            }
+            created = Some(root.join(load::REGISTRY));
+            root
         }
     };
 
@@ -1294,8 +1326,18 @@ fn cmd_add(args: &Args) -> i32 {
     }
 
     if args.dry_run {
-        println!("\n--dry-run: nothing written");
+        if let Some(p) = &created {
+            println!(
+                "\n--dry-run: nothing written; {} would be created",
+                p.display()
+            );
+        } else {
+            println!("\n--dry-run: nothing written");
+        }
         return 0;
+    }
+    if let Some(p) = &created {
+        println!("  created {}", p.display());
     }
 
     let mut registered = Vec::new();

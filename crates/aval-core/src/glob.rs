@@ -68,6 +68,36 @@ pub fn matches(glob: &str, path: &str) -> bool {
     segments(&g, &p)
 }
 
+/// Whether `glob` matches at least one path under the directory `dir` — the
+/// question a directory asks of an area. `web/**` matches under `web`, and so
+/// do `**` and `web/*.tsx`; `cmd/**` does not. A malformed glob matches
+/// nothing. The empty `dir` is the repository root, under which every
+/// well-formed glob matches something.
+pub fn matches_under(glob: &str, dir: &str) -> bool {
+    if bad(glob).is_some() {
+        return false;
+    }
+    let g: Vec<&str> = glob.split('/').collect();
+    let d: Vec<&str> = if dir.is_empty() {
+        Vec::new()
+    } else {
+        dir.split('/').collect()
+    };
+    under(&g, &d)
+}
+
+fn under(g: &[&str], d: &[&str]) -> bool {
+    match (g.split_first(), d.split_first()) {
+        // Glob left over once the directory is consumed: it can match
+        // something beneath it.
+        (Some(_), None) => true,
+        (None, _) => false,
+        // `**` absorbs the rest of the directory, whatever the glob needs next.
+        (Some((&"**", _)), Some(_)) => true,
+        (Some((seg, rest)), Some((head, tail))) => segment(seg, head) && under(rest, tail),
+    }
+}
+
 fn segments(g: &[&str], p: &[&str]) -> bool {
     match g.split_first() {
         None => p.is_empty(),
@@ -148,6 +178,21 @@ mod tests {
         assert!(matches("*", ".github"));
         assert!(matches("**", ".github/workflows/ci.yaml"));
         assert!(matches("?git", ".git"));
+    }
+
+    #[test]
+    fn a_directory_is_under_a_glob_when_something_in_it_matches() {
+        assert!(matches_under("web/**", "web"));
+        assert!(matches_under("web/**", "web/src"));
+        assert!(matches_under("web/*.tsx", "web"));
+        assert!(matches_under("**", "anything"));
+        assert!(matches_under("**/main.go", "cmd"));
+        assert!(matches_under("cmd/*/main.go", "cmd"));
+        assert!(matches_under("web/**", ""));
+        assert!(!matches_under("cmd/**", "web"));
+        assert!(!matches_under("web/*.tsx", "web/src"));
+        assert!(!matches_under("web", "web"));
+        assert!(!matches_under("./web/**", "web"));
     }
 
     #[test]
