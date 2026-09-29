@@ -1,0 +1,37 @@
+## mdBook configuration.
+##
+## `src = "."` rather than the conventional `src/`, the same layout as amont's
+## and amont-agent's books: the pages are linked from the README by their
+## `docs/*.md` paths, which is also how GitHub and npm render them, and a
+## `docs/src/` would put every one of those links one directory off.
+##
+## The consequence to know about: mdBook renders what SUMMARY.md lists, and warns
+## about the rest. Adding a page under `docs/` means adding it to SUMMARY.md, or
+## it is a file in the repository that the site does not have.
+
+[book]
+title = "aval"
+description = "Ask what the current architecture decision is, and get a typed answer: git is the history, ADRs are the evidence, `aval resolve` tells you what is true now."
+authors = ["Frederic Rousseau"]
+language = "en"
+src = "."
+
+[build]
+## OUTSIDE the source directory, deliberately. With `src = "."` the default
+## `docs/book` would put the rendered site inside the directory being rendered,
+## so each build would try to ingest the previous build's output. `target/` is
+## already gitignored, so this also keeps `git status` clean after a local
+## `mdbook build docs`.
+build-dir = "../target/book"
+create-missing = false
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/fredericrous/aval"
+edit-url-template = "https://github.com/fredericrous/aval/edit/main/docs/{path}"
+site-url = "/aval/"
+
+[output.html.fold]
+enable = true
+level = 1
