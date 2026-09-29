@@ -42,9 +42,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-/// How much each signal is worth. Public because they are documented in the
-/// README and asserted by the battery: a weight is part of what the ranking
-/// means, not a number buried in an expression.
+/// How much each signal is worth. Public because they are documented in
+/// docs/relevance.md and asserted by the battery: a weight is part of what the
+/// ranking means, not a number buried in an expression.
 pub const W_TEXT: f64 = 1.0;
 pub const W_PATH: f64 = 0.6;
 pub const W_MENTION: f64 = 2.0;
