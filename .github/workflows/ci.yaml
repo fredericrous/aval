@@ -17,9 +17,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Skips `cargo test` only when a signature by a key in
+      # .github/allowed_signers covers this exact tree on this platform;
+      # anything else runs it. fmt and clippy mirror pre-commit and always run.
+      - id: attest
+        uses: fredericrous/attest@v1
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - if: ${{ !contains(fromJSON(steps.attest.outputs.gates || '[]'), 'pre-push-cargo-test') }}
+        run: cargo test
 
   msrv:
     # A `rust-version` nobody compiles against is a comment with syntax.
