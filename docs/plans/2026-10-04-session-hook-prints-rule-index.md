@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 branch: feat/hook-rule-index
 repos: [aval]
 adrs: [decisions:ADR-0026, decisions:ADR-0022]
@@ -75,11 +75,12 @@ text stays one call away: `aval rule <id>`, MCP `aval_rule`.
 - MCP `aval_rules` description says the hook printed the constraints' ids.
   The `render.rs` comment that stdout lines are counted by the hook is
   updated to name the plain listing.
-- SEMANTICS §2.4 and §14, README hook and rules sections, CHANGELOG
+- SEMANTICS §2.4 and §14, `docs/agents.md` and `docs/rules-and-traits.md`
+  (the README only links to them), CHANGELOG
   (minor: new flag) updated to match. Version 1.9.0 in `Cargo.toml`.
 
 ## Phases
-- [ ] Phase 1 — `--index` in `main.rs` (parser, USAGE, refusals) and
+- [x] Phase 1 — `--index` in `main.rs` (parser, USAGE, refusals) and
   `render.rs` (`rules_index`).
   - Integration tests in `tests/rules.rs`, valid ids only: `a.b-x`,
     `a.b.c`, `a.c` give one `a` line; piped output is unwrapped.
@@ -91,7 +92,7 @@ text stays one call away: `aval rule <id>`, MCP `aval_rule`.
     ids under one prefix whose total passes 80 columns → the second starts
     a new line, unsplit. Also, as defence only, inputs the grammar forbids
     (a dot-less id, an id over the width).
-- [ ] Phase 2 — hook template (`hook.rs` `SCRIPT_BODY`), MCP description,
+- [x] Phase 2 — hook template (`hook.rs` `SCRIPT_BODY`), MCP description,
   tests in `tests/hook.rs`:
   - the grouped form is present (`names: reveal-intent`, replacing the
     `names.reveal-intent` assertion at `:260`), and the statement is
@@ -101,7 +102,7 @@ text stays one call away: `aval rule <id>`, MCP `aval_rule`.
   - fallback with `--index` refused: the full id `names.reveal-intent`
     on its own line, and the statement absent;
   - shellcheck clean.
-- [ ] Phase 3 — SEMANTICS, README, CHANGELOG, version bump; `make check`.
+- [x] Phase 3 — SEMANTICS, README, CHANGELOG, version bump; `make check`.
 
 Implementation path: aval has `relais.toml` and `relais doctor` is green, so
 Phases 1–2 go through a relais run (write scope `crates/aval/**`;
@@ -129,18 +130,43 @@ All in a scratch copy of the decisions repository, with the branch build.
   `aval rules --level constraint --index` plus each of `--json`, `--all`,
   `--all-repos`, then `aval rules --index` with no `--level` → exit 2
   each, and stderr equals the refusal message in Behaviour.
+  - Observed: 76 of 76 ids, `comm -3` empty. The corpus has 76 active
+    constraints since decisions#39 (ADR-0026 added three), not 73. Piped:
+    37 lines for 37 distinct prefixes. All four refusals: exit 2, exact
+    message. On a pseudo-terminal: 45 lines, none over 80 columns,
+    continuation lines indented 6 spaces, 76 ids rebuilt, 76 unique.
 - Phase 2: `aval hook install`, then run the hook →
   `wc -c` ≤ 9,000 (from 32,168); grep for the first 40 characters of each
   of the 73 statements → 0 hits; printed N = 73 and M =
   `aval rules --level heuristic | grep -c .`. `aval hook install --check`
   → stale before the reinstall, up to date after. The new hook with the
   1.8.0 binary first on PATH → the banner, then the 73 ids one per line.
+  - Observed: `--check` exit 1 before, 0 after; hook 7,935 bytes; 0 of 76
+    statements after the `RULES —` line (`grep -F`-style substring check);
+    `(76 constraints, 134 heuristics)`, plain heuristic count 134; with
+    aval 1.8.0 (`~/.local/bin/aval`): the `OLDER THAN THIS HOOK` banner,
+    76 full ids, 8,383 bytes.
 - Phase 3: `make check` (fmt, clippy -D warnings, tests, msrv) → exit 0,
   with the new tests listed as passed, and the msrv step printing
   `msrv: building with <version>`. A `SKIPPED` line fails this check: the
   rust-version toolchain is installed first (`Makefile:45`).
+  - Observed: `make check` exit 0; `msrv: building with 1.74.0`, no
+    `SKIPPED`; 3 new tests in `tests/rules.rs`, 2 in `tests/hook.rs`,
+    5 unit tests in `render.rs`, all passed; shellcheck 0.11.0 ran.
+
+## Implementation review
+approve-with-changes, then delta approve-with-changes. Fixed: unflowed docs paragraph, 1.9.0 hook example, plan record (phases, observations, doc files).
+deliberate: CI `AVAL_VERSION` pin stays 1.8.0 until 1.9.0 is released; a 1.9.0-written hook is "newer" to 1.8.0, so `install --check` passes.
+Round 1: 53k tokens, 47 s. Delta: 32k tokens, 19 s.
 
 ## Outcome
+Shipped: `aval rules --index`, the index hook, docs, 1.9.0 in `Cargo.toml`.
+The decisions hook drops from 32,168 to 7,935 bytes (−75%). Not shipped:
+the release, the `AVAL_VERSION` pin bump in `.github/workflows/adr.yaml`
+after it, and `aval hook install` in each consumer — all on request.
+Surprise: macOS pseudo-terminals give no end of file, so a pty read must
+poll the child, not wait for EOF.
+
 To measure after release:
 - Discovery: `aval rule` / `aval_rule` calls per session in transcripts,
   the week before and the week after.
