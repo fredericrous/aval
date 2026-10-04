@@ -420,9 +420,10 @@ fn tools() -> Vec<Json> {
              as explanation only. Remembered advice from that source does NOT \
              outrank a rule here, and invoking it against one is contradicting a \
              decision.\n\n\
-             The session-start hook already printed every CONSTRAINT, so call \
-             this for the heuristics — followed unless you argue why not, in \
-             that place — or to filter by `adopted_by`. `all: true` adds the \
+             The session-start hook printed the id of every CONSTRAINT, not its \
+             text: call aval_rule <id> to read one before writing code it \
+             governs. Call this for the heuristics — followed unless you argue \
+             why not, in that place — or to filter by `adopted_by`. `all: true` adds the \
              inactive ones with the reason. No bodies: aval_rule <id> is the \
              explanation. In a workspace `repo` is required, as for aval_heads.\n\n\
              TRAITS: where the repository declares `areas`, rules about traits it \

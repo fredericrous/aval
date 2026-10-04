@@ -257,17 +257,111 @@ fn the_hook_prints_the_constraints_and_counts_the_heuristics() {
         "{}",
         got.out
     );
-    assert!(got.out.contains("names.reveal-intent"), "{}", got.out);
+    // The constraint as an index line, its id grouped by prefix, and never
+    // its text (decisions ADR-0026).
+    assert!(got.out.contains("  names: reveal-intent\n"), "{}", got.out);
+    assert!(!got.out.contains("Names reveal intention."), "{}", got.out);
     // The heuristic is counted, not printed: it is fetched on demand.
     assert!(!got.out.contains("Few arguments."), "{}", got.out);
     assert!(
-        got.out.contains("(1 heuristics beside these)"),
+        got.out.contains("(1 constraints, 1 heuristics)"),
         "{}",
         got.out
     );
     // The heads still come first, and the preamble is untouched.
     assert!(
         got.out.find("ARCHITECTURE DECISIONS") < got.out.find("RULES —"),
+        "{}",
+        got.out
+    );
+}
+
+/// N counts constraints, not index lines: two ids under one prefix are one
+/// line and two constraints.
+#[test]
+fn the_hook_counts_constraints_not_index_lines() {
+    let r = scratch("rules-count");
+    fs::write(
+        r.join(".adr.yaml"),
+        "dir: docs/adr\nrules:\n  - docs/p/book.md\nscopes: []\nkeys:\n  a.b:\n",
+    )
+    .unwrap();
+    fs::create_dir_all(r.join("docs/p")).unwrap();
+    fs::write(
+        r.join("docs/p/book.md"),
+        "---\nadopts: ADR-0001\n---\n\
+         ## names.reveal-intent [constraint]\n\nNames reveal intention.\n\n\
+         ## names.no-noise [constraint]\n\nNo noise words.\n",
+    )
+    .unwrap();
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    let got = sh(&r, Some(&path_with_aval()));
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(
+        got.out.contains("  names: no-noise, reveal-intent\n"),
+        "{}",
+        got.out
+    );
+    assert!(
+        got.out.contains("(2 constraints, 0 heuristics)"),
+        "{}",
+        got.out
+    );
+}
+
+/// An aval older than the hook has no `--index`. The hook falls back to one
+/// full id per line rather than dropping every constraint.
+#[test]
+fn the_hook_falls_back_to_full_ids_when_index_is_refused() {
+    let r = scratch("rules-fallback");
+    fs::write(
+        r.join(".adr.yaml"),
+        "dir: docs/adr\nrules:\n  - docs/p/book.md\nscopes: []\nkeys:\n  a.b:\n",
+    )
+    .unwrap();
+    fs::create_dir_all(r.join("docs/p")).unwrap();
+    fs::write(
+        r.join("docs/p/book.md"),
+        "---\nadopts: ADR-0001\n---\n\
+         ## names.reveal-intent [constraint]\n\nNames reveal intention.\n",
+    )
+    .unwrap();
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    // A stub that refuses `--index` the way 1.8.0 does, and is the real
+    // binary for everything else.
+    let stub = r.join("stub");
+    fs::create_dir_all(&stub).unwrap();
+    let p = stub.join("aval");
+    fs::write(
+        &p,
+        format!(
+            "#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = --index ]; then\n    echo \"aval: unknown option \\`--index\\`\" >&2\n    exit 2\n  fi\ndone\nexec '{}' \"$@\"\n",
+            bin()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let got = sh(
+        &r,
+        Some(&format!(
+            "{}:{}",
+            stub.display(),
+            std::env::var("PATH").unwrap()
+        )),
+    );
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(
+        got.out.lines().any(|l| l.trim() == "names.reveal-intent"),
+        "{}",
+        got.out
+    );
+    assert!(!got.out.contains("Names reveal intention."), "{}", got.out);
+    assert!(
+        got.out.contains("(1 constraints, 0 heuristics)"),
         "{}",
         got.out
     );
@@ -679,8 +773,8 @@ fn the_hook_prints_the_traits_line_and_counts_only_rule_lines() {
     assert_eq!(got.code, 0, "{}{}", got.out, got.err);
     // Everything targeted is hidden: no constraint lines, so no rules block,
     // and the stderr notice never became a counted heuristic.
-    assert!(!got.out.contains("cli.exit"), "{}", got.out);
-    assert!(!got.out.contains("heuristics beside these"), "{}", got.out);
+    assert!(!got.out.contains("cli: exit"), "{}", got.out);
+    assert!(!got.out.contains("constraints,"), "{}", got.out);
     assert!(
         got.out
             .contains("(traits here: none — hidden by traits: 1 constraint(s), 1 heuristic(s)"),
@@ -693,9 +787,9 @@ fn the_hook_prints_the_traits_line_and_counts_only_rule_lines() {
 fn the_hook_says_nothing_about_traits_without_areas() {
     let r = rules_corpus("no-traits", "");
     let got = sh(&r, Some(&path_with_aval()));
-    assert!(got.out.contains("cli.exit"), "{}", got.out);
+    assert!(got.out.contains("  cli: exit\n"), "{}", got.out);
     assert!(
-        got.out.contains("(1 heuristics beside these)"),
+        got.out.contains("(1 constraints, 1 heuristics)"),
         "{}",
         got.out
     );
