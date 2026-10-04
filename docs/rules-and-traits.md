@@ -47,15 +47,16 @@ every active one, by id, grouped by prefix:
 
 ```console
 $ aval rules --level constraint --index
-  names: no-noise, reveal-intent
   functions: do-one-thing, small
+  names: no-noise, reveal-intent
 ```
 
-`aval rule <id>` gives one rule's text. A `heuristic` is followed unless a reviewer argues why not,
-in that place, and is fetched on demand. Precedence, which the hook also
-prints: the decision at the scope asked, then the default-scope decision, then
-these rules, then the book a rule cites — as explanation only. Remembered
-advice from that book does not outrank a rule here.
+`aval rule <id>` gives one rule's text. A `heuristic` is followed unless a
+reviewer argues why not, in that place, and is fetched on demand. Precedence,
+which the hook also prints: the decision at the scope asked, then the
+default-scope decision, then these rules, then the book a rule cites — as
+explanation only. Remembered advice from that book does not outrank a rule
+here.
 
 `--adopted-by <record>` lists only the rules one record adopts, and `--all`
 adds the inactive ones, each with the reason it is inactive. `--index` needs

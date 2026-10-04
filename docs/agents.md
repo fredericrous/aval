@@ -32,7 +32,7 @@ The script's second line names the aval that wrote it:
 
 ```sh
 #!/bin/sh
-# aval-hook: written by aval 1.8.0
+# aval-hook: written by aval 1.9.0
 ```
 
 A script from a **newer** aval is not stale, and an older aval leaves it alone
