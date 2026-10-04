@@ -348,9 +348,11 @@ hold" is the copy that goes stale.
 
 Two levels, and the difference is what a reviewer does with them:
 
-- `constraint` — followed; a review blocks on it. The session hook prints every
+- `constraint` — followed; a review blocks on it. The session hook names every
   active constraint, because a constraint nobody is shown is one nobody
-  follows.
+  follows. From 1.9.0 it names each by id only, grouped by prefix (`aval
+  rules --index`), and `aval rule <id>` has the text: always-on text is an
+  index, and the detail is fetched when a task needs it.
 - `heuristic` — followed unless a reviewer argues why not, **in that place**.
   Fetched on demand, never injected: a heuristic printed at every session start
   would spend context on advice that is right to break.
@@ -416,8 +418,8 @@ included.
   the two are never looked up in the same place.
 - The **statement** is the first paragraph under the heading: the first
   non-blank line and every line up to the first blank one, joined with single
-  spaces. It MUST be non-empty and printable (§3.7). It is the one line the
-  hook and `aval rules` print, so it is joined rather than kept as written — a
+  spaces. It MUST be non-empty and printable (§3.7). It is the one line
+  `aval rules` prints, so it is joined rather than kept as written — a
   hard wrap is typography, not part of what the rule says.
 - The **body** is everything after that paragraph up to the next rule heading
   or end of file, trimmed. It may be empty, and it MUST be printable (§3.7):
@@ -1343,7 +1345,17 @@ lost every decision would read as a corpus that has none. When `heads` fails
 for any other reason the script prints one line saying it did and to run `aval
 check`, and the session continues. From 1.7.0 the script also prints `aval
 traits --summary` (§2.5), and reads rules with their stderr discarded, so the
-omission notice never becomes a counted rule line.
+omission notice never becomes a counted rule line. From 1.9.0 the script prints
+the constraints as `aval rules --level constraint --index`, counts them from
+the plain listing (an index line holds a whole prefix), and falls back to one
+full id per line when an older aval refuses `--index`, so an older binary
+never silently drops the constraints.
+
+`aval rules --index` takes `--level`, `--adopted-by` and `--all-traits`. It
+exits `2` without `--level`, or with `--json`, `--all` or `--all-repos`: an
+index of one level is a list a reader can act on, and the full list is `--json`.
+Off a terminal it prints exactly one line per prefix; on a terminal it wraps at
+80 columns, after a `, ` and never inside an id.
 
 The generated hook also runs `add --check --quiet --budget 5`, at most once an
 hour per repository, and prints what that reports only when it exits `1`. Its

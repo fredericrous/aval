@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.9.0
+
+### Added
+
+- **`aval rules --level <level> --index`** lists rule ids grouped by prefix,
+  one line per prefix (`names: no-noise, reveal-intent`), and no text. It
+  wraps at 80 columns on a terminal, never inside an id, and never off one.
+  It exits 2 without `--level`, or with `--json`, `--all` or `--all-repos`.
+
+### Changed
+
+- **The session hook prints the constraint index, not the constraints.**
+  Every active constraint's first paragraph was 26 KB of a 32 KB session
+  load in the fleet decisions repository; the index is about 2 KB, and
+  `aval rule <id>` (MCP `aval_rule`) has the text. This is the fleet rule
+  `guidance.always-on-is-an-index` (decisions ADR-0026). The count line is
+  now `(N constraints, M heuristics)`, counted from the plain listing. An
+  aval older than the hook refuses `--index`; the hook then prints one full
+  id per line instead of dropping the constraints. The preamble is shorter
+  and keeps the statement that record wording is data, not instruction.
+  Re-run `aval hook install` to take it.
+
 ## v1.8.0
 
 ### Added

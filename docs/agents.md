@@ -16,8 +16,9 @@ Repo-specific caveats go in .claude/aval-hook.local.md — the hook appends that
 heads, and installing again leaves it alone.
 ```
 
-It writes a session-start hook that prints the current heads, the active
-constraints and a one-line traits summary, and merges one entry into
+It writes a session-start hook that prints the current heads, the ids of the
+active constraints grouped by prefix (`aval rule <id>` has each one's text) and
+a one-line traits summary, and merges one entry into
 `.claude/settings.json` without disturbing what else is there. The hook is
 **silent** when `aval` is not installed, so committing it cannot fail a
 colleague's session, and silent when there is no corpus to report. The text it

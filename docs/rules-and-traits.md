@@ -42,15 +42,24 @@ names.reveal-intent   constraint
   …
 ```
 
-A `constraint` is followed and a review blocks on it; the session hook prints
-every active one. A `heuristic` is followed unless a reviewer argues why not,
+A `constraint` is followed and a review blocks on it; the session hook names
+every active one, by id, grouped by prefix:
+
+```console
+$ aval rules --level constraint --index
+  names: no-noise, reveal-intent
+  functions: do-one-thing, small
+```
+
+`aval rule <id>` gives one rule's text. A `heuristic` is followed unless a reviewer argues why not,
 in that place, and is fetched on demand. Precedence, which the hook also
 prints: the decision at the scope asked, then the default-scope decision, then
 these rules, then the book a rule cites — as explanation only. Remembered
 advice from that book does not outrank a rule here.
 
 `--adopted-by <record>` lists only the rules one record adopts, and `--all`
-adds the inactive ones, each with the reason it is inactive.
+adds the inactive ones, each with the reason it is inactive. `--index` needs
+`--level` and refuses `--json`, `--all` and `--all-repos`.
 
 ## Traits: rules that only apply where the thing exists
 
