@@ -10,6 +10,7 @@ use aval_core::graph::{DerivedStatus, Graph, Inconsistent, Unknown, Verdict};
 use aval_core::json::Json;
 use aval_core::model::{Adr, AdrId, Finding, Level, Rule, Slot};
 use aval_core::pack::Pack;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// A resolved answer, with everything either rendering needs.
@@ -609,8 +610,9 @@ pub fn rules_omitted(g: &Graph, f: &Filter) -> Option<Omitted> {
 }
 
 /// The listing, and nothing else: stdout stays pure rule lines, because the
-/// session hook counts them (`grep -c .`). The omission notice is the caller's
-/// to write, to stderr.
+/// session hook counts this plain listing (`grep -c .`) to say how many rules
+/// its index stands for. The omission notice is the caller's to write, to
+/// stderr.
 pub fn rules_text(g: &Graph, f: &Filter) -> String {
     let (rows, _) = selected(g, f);
     // Padded to the longest id in what is actually printed, so the statements
@@ -631,6 +633,70 @@ pub fn rules_text(g: &Graph, f: &Filter) -> String {
         }
     }
     s
+}
+
+/// The listing as an index: ids only, one line per prefix (the id up to its
+/// last `.`), so the session hook can put every constraint in front of an
+/// agent without its text (decisions ADR-0026). `aval rule <id>` has the text.
+///
+/// `width` wraps lines for a person at a terminal; `None` never wraps, so a
+/// script sees exactly one line per prefix.
+pub fn rules_index(g: &Graph, f: &Filter, width: Option<usize>) -> String {
+    let (rows, _) = selected(g, f);
+    index_lines(rows.iter().map(|(r, _)| r.id.as_str()), width)
+}
+
+/// Grouped in a map keyed by prefix rather than by runs of the sorted ids:
+/// plain id order puts `a.b-x` before `a.b.c` before `a.c`, and grouping runs
+/// would print the `a` prefix twice. The grammar requires a `.` in every id;
+/// one without stands alone on its line all the same.
+fn index_lines<'a>(ids: impl Iterator<Item = &'a str>, width: Option<usize>) -> String {
+    let mut groups: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for id in ids {
+        match id.rsplit_once('.') {
+            Some((prefix, rest)) => groups.entry(prefix).or_default().push(rest),
+            None => {
+                groups.entry(id).or_default();
+            }
+        }
+    }
+    let mut s = String::new();
+    for (prefix, rests) in groups {
+        if rests.is_empty() {
+            s.push_str(&format!("  {}\n", prefix));
+        } else {
+            s.push_str(&index_line(prefix, &rests, width));
+        }
+    }
+    s
+}
+
+/// One prefix's line. Wrapped lines break only after `, `, so an id is never
+/// split; an item that does not fit starts the next line, indented.
+fn index_line(prefix: &str, rests: &[&str], width: Option<usize>) -> String {
+    let mut out = String::new();
+    let mut line = format!("  {}: ", prefix);
+    for (i, rest) in rests.iter().enumerate() {
+        let last = i + 1 == rests.len();
+        let item = if last {
+            rest.to_string()
+        } else {
+            format!("{},", rest)
+        };
+        let fits = width.map_or(true, |w| line.chars().count() + item.chars().count() <= w);
+        if !fits && !line.trim_end().ends_with(':') {
+            out.push_str(line.trim_end());
+            out.push('\n');
+            line = String::from("      ");
+        }
+        line.push_str(&item);
+        if !last {
+            line.push(' ');
+        }
+    }
+    out.push_str(&line);
+    out.push('\n');
+    out
 }
 
 pub fn rule_json(g: &Graph, r: &Rule) -> Json {
@@ -1239,4 +1305,54 @@ pub fn percent_decode(s: &str) -> Option<String> {
         }
     }
     String::from_utf8(out).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::index_lines;
+
+    #[test]
+    fn index_groups_a_prefix_once_whatever_the_id_order() {
+        let got = index_lines(["a.b-x", "a.b.c", "a.c"].into_iter(), None);
+        assert_eq!(got, "  a: b-x, c\n  a.b: c\n");
+    }
+
+    #[test]
+    fn index_never_wraps_without_a_width() {
+        let ids: Vec<String> = (0..6)
+            .map(|i| format!("p.{}-{}", "x".repeat(20), i))
+            .collect();
+        let got = index_lines(ids.iter().map(String::as_str), None);
+        assert_eq!(got.lines().count(), 1);
+        assert!(got.len() > 80);
+    }
+
+    #[test]
+    fn index_wraps_after_a_comma_and_never_inside_an_id() {
+        let a = format!("p.{}", "a".repeat(40));
+        let b = format!("p.{}", "b".repeat(40));
+        let got = index_lines([a.as_str(), b.as_str()].into_iter(), Some(80));
+        let lines: Vec<&str> = got.lines().collect();
+        assert_eq!(lines.len(), 2, "{got}");
+        assert_eq!(lines[0], format!("  p: {},", "a".repeat(40)));
+        assert_eq!(lines[1].trim_start(), "b".repeat(40));
+        assert!(lines.iter().all(|l| l.chars().count() <= 80));
+    }
+
+    // The grammar forbids both inputs below; the renderer still prints
+    // something a reader can use rather than panicking or dropping them.
+    #[test]
+    fn index_prints_a_dotless_id_alone() {
+        assert_eq!(index_lines(["names"].into_iter(), Some(80)), "  names\n");
+    }
+
+    #[test]
+    fn index_keeps_an_id_wider_than_the_width_whole() {
+        let long = format!("p.{}", "z".repeat(100));
+        let got = index_lines(["p.a", long.as_str()].into_iter(), Some(80));
+        assert!(
+            got.lines().any(|l| l.trim_start() == "z".repeat(100)),
+            "{got}"
+        );
+    }
 }

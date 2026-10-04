@@ -125,6 +125,77 @@ fn rules_filters_by_level_and_by_adopting_record() {
     assert_eq!(run(&r, &["rules", "--level", "advisory"]).code, 2);
 }
 
+// --- the index (decisions ADR-0026: always-on text is an index) -----------
+
+const INDEX_REFUSED: &str = "aval: --index needs --level and cannot be combined with --json, --all or --all-repos; use aval rules --json for the full list";
+
+/// A corpus whose rule ids sort so that a run-based grouping would print one
+/// prefix twice: plain order is `a.b-x`, `a.b.c`, `a.c`.
+fn index_corpus(name: &str, extra: &str) -> PathBuf {
+    let r = scratch(name);
+    write(
+        &r,
+        ".adr.yaml",
+        "dir: docs/adr\nrules:\n  - docs/principles/book.md\nscopes: [cloud]\nkeys:\n  a.b:\n",
+    );
+    write(&r, "docs/adr/0001-a.md", ADR);
+    write(
+        &r,
+        "docs/principles/book.md",
+        &format!(
+            "---\nadopts: ADR-0001\n---\n# Restated\n\n\
+             ## a.b-x [constraint]\n\nOne.\n\n\
+             ## a.b.c [constraint]\n\nTwo.\n\n\
+             ## a.c [constraint]\n\nThree.\n\n{}",
+            extra
+        ),
+    );
+    assert_eq!(run(&r, &["heads", "--write"]).code, 0);
+    r
+}
+
+#[test]
+fn rules_index_prints_each_prefix_once() {
+    let r = index_corpus("index-prefix", "");
+    let got = run(&r, &["rules", "--level", "constraint", "--index"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert_eq!(got.out, "  a: b-x, c\n  a.b: c\n");
+}
+
+#[test]
+fn rules_index_is_one_unwrapped_line_per_prefix_when_piped() {
+    // Five 40-character tails under one prefix: far past 80 columns.
+    let extra: String = (0..5)
+        .map(|i| format!("## long.{}{} [constraint]\n\nLong.\n\n", "x".repeat(39), i))
+        .collect();
+    let r = index_corpus("index-unwrapped", &extra);
+    let got = run(&r, &["rules", "--level", "constraint", "--index"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    let long: Vec<&str> = got
+        .out
+        .lines()
+        .filter(|l| l.starts_with("  long:"))
+        .collect();
+    assert_eq!(long.len(), 1, "{}", got.out);
+    assert!(long[0].len() > 80, "{}", got.out);
+    assert_eq!(got.out.lines().count(), 3, "{}", got.out);
+}
+
+#[test]
+fn rules_index_refuses_each_flag_it_cannot_honour() {
+    let r = index_corpus("index-refusals", "");
+    // `--level` is set in each, so only the forbidden flag differs.
+    for flag in ["--json", "--all", "--all-repos"] {
+        let got = run(&r, &["rules", "--level", "constraint", "--index", flag]);
+        assert_eq!(got.code, 2, "{flag}: {}{}", got.out, got.err);
+        assert_eq!(got.err.trim_end(), INDEX_REFUSED, "{flag}");
+        assert_eq!(got.out, "", "{flag}");
+    }
+    let got = run(&r, &["rules", "--index"]);
+    assert_eq!(got.code, 2, "{}{}", got.out, got.err);
+    assert_eq!(got.err.trim_end(), INDEX_REFUSED);
+}
+
 /// Activity is not a check: a rule whose record was superseded is inactive,
 /// listed under `--all` with the reason, and `check` says nothing about it.
 #[test]

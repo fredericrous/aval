@@ -12,7 +12,7 @@ use aval_core::json::Json;
 use aval_core::model::{Finding, Layer, Slot, DEFAULT_SCOPE};
 use aval_core::project;
 use load::Loaded;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -63,8 +63,9 @@ USAGE
     aval rules [--level <level>]           the adopted rules, one line each;
                [--adopted-by <record>]     --level constraint|heuristic, --all
                [--all] [--all-traits]      adds the inactive ones with the reason,
-                                           --all-traits the ones about traits
-                                           this repository's areas do not name
+               [--index]                   --all-traits the ones about traits
+                                           this repository's areas do not name,
+                                           --index only their ids, by prefix
     aval traits [--summary]                what this repository says it is, and
                 [--detect | --check]       what its tracked files suggest;
                                            ADVISORY detection, never a filter
@@ -100,6 +101,7 @@ OPTIONS
     --adopted-by  rules: only those one record adopts
     --all         rules: inactive rules too, each with the reason
     --all-traits  rules: rules for every trait, not only this repository's
+    --index       rules: ids grouped by prefix, one line each; needs --level
     --summary     traits: the one line the session hook prints
     --detect      traits: propose `areas:` from the tracked files
     --all-repos   resolve, keys, heads, history, rules: ask every corpus `aval repos`
@@ -139,6 +141,8 @@ struct Args {
     all: bool,
     all_repos: bool,
     all_traits: bool,
+    /// `rules`: ids grouped by prefix instead of one statement per line.
+    index: bool,
     summary: bool,
     detect: bool,
     write: bool,
@@ -180,6 +184,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         all: false,
         all_repos: false,
         all_traits: false,
+        index: false,
         summary: false,
         detect: false,
         write: false,
@@ -204,6 +209,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--all" => a.all = true,
             "--all-repos" => a.all_repos = true,
             "--all-traits" => a.all_traits = true,
+            "--index" => a.index = true,
             "--summary" => a.summary = true,
             "--detect" => a.detect = true,
             "--write" => a.write = true,
@@ -540,11 +546,20 @@ fn cmd_keys(args: &Args) -> i32 {
 ///
 /// One line each, and no bodies: this is the list a caller reads to find out
 /// what there is. `aval rule <id>` is where the explanation lives, and keeping
-/// them apart is what lets the session hook print every constraint without
-/// printing an essay per constraint.
+/// them apart is what lets the session hook name every constraint without
+/// printing an essay per constraint. `--index` goes one step further and
+/// prints the ids alone, grouped by prefix: that is what the hook prints.
 fn cmd_rules(args: &Args) -> i32 {
     if !args.positional.is_empty() {
         eprintln!("aval: `rules` takes no arguments; `aval rule <id>` shows one");
+        return E_USAGE;
+    }
+    // An index of one level is a list a reader can act on; refused before any
+    // corpus is loaded, so the answer does not depend on the corpus.
+    if args.index && (args.level.is_none() || args.json || args.all || args.all_repos) {
+        eprintln!(
+            "aval: --index needs --level and cannot be combined with --json, --all or --all-repos; use aval rules --json for the full list"
+        );
         return E_USAGE;
     }
     let level = match args.level.as_deref() {
@@ -576,7 +591,14 @@ fn cmd_rules(args: &Args) -> i32 {
     if args.json {
         println!("{}", render::rules_json(&l.graph, &filter));
     } else {
-        print!("{}", render::rules_text(&l.graph, &filter));
+        if args.index {
+            // Wrapped for a person at a terminal only: a script, the session
+            // hook among them, gets exactly one line per prefix.
+            let width = std::io::stdout().is_terminal().then_some(80);
+            print!("{}", render::rules_index(&l.graph, &filter, width));
+        } else {
+            print!("{}", render::rules_text(&l.graph, &filter));
+        }
         let _ = std::io::stdout().flush();
         // stderr, never stdout: the session hook counts stdout lines.
         if let Some(n) = render::rules_omitted(&l.graph, &filter)
