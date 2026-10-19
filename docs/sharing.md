@@ -52,6 +52,11 @@ is refused — the reviewer and the model must see the same bytes.
 
 ## Knowing when a pack fell behind
 
+A pack is **behind** when its revision names a commit that publishes different
+declarations. A source that moved without changing what the pack declares (a
+plan document, say) is still `current`. Re-adding a behind pack shows the diff
+before it overwrites an edit, so nothing is lost by running `aval add`.
+
 A pack goes stale silently otherwise, so there are two ways to be told. The
 session hook asks (see [in front of an agent](agents.md#vendored-packs-that-fell-behind)).
 And a consumer's CI can ask, as an advisory job, where its runner holds a

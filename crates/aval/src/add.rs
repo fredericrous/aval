@@ -502,7 +502,11 @@ pub struct Origin {
 #[derive(Debug)]
 pub enum Standing {
     Current,
-    /// The revision now names a different commit.
+    /// The revision names a different commit that publishes the same
+    /// declarations (the generator's `aval` version aside): nothing to adopt.
+    CurrentMoved(String),
+    /// The revision names a commit that publishes different declarations, or
+    /// one whose publication could not be compared.
     Behind(String),
     /// The revision still names the recorded commit, but the file no longer
     /// declares what that commit published.
@@ -535,8 +539,9 @@ pub fn origins(root: &Path, rels: &[String]) -> Vec<Result<Origin, String>> {
         .collect()
 }
 
-/// Re-resolve one pack's revision and say whether it still names what was
-/// vendored.
+/// Re-resolve one pack's revision and say whether it still publishes what was
+/// vendored. `Behind` means different declarations, not merely a different
+/// commit.
 ///
 /// Human-run, and never on a hook or a gate path. It reaches the network, and
 /// a check that needed the network would fail on a plane, in a CI job with no
@@ -549,8 +554,41 @@ pub fn standing(root: &Path, o: &Origin) -> Standing {
     };
     match fetch::resolve(&source) {
         Ok(id) if id == o.commit => unedited(root, o, &source),
-        Ok(id) => Standing::Behind(id),
+        Ok(id) => moved(root, o, &source, id),
         Err(e) => Standing::Unknown(e),
+    }
+}
+
+/// The revision names a commit other than the vendored one. It is `Behind`
+/// only if that commit publishes different declarations; a fetch that fails
+/// stays `Behind`, since the revision already answered that it moved and an
+/// `Unknown` would hide a real move under `--quiet`.
+fn moved(root: &Path, o: &Origin, source: &Source, id: String) -> Standing {
+    let scratch = Scratch::new(&format!("{}-moved", o.name));
+    let Ok(published) = fetch::fetch(source, &id, &scratch.0, pack::FILE) else {
+        return Standing::Behind(id);
+    };
+    match std::fs::read_to_string(root.join(&o.rel)) {
+        Ok(have) if declares_the_same_but_generator(&have, &published) => {
+            Standing::CurrentMoved(id)
+        }
+        _ => Standing::Behind(id),
+    }
+}
+
+/// Like `declares_the_same`, but the top-level `aval` field, the version of
+/// the generator that wrote the pack, is not a declaration. A parse failure
+/// on either side compares unequal.
+fn declares_the_same_but_generator(a: &str, b: &str) -> bool {
+    fn without_generator(mut n: yaml::Node) -> yaml::Node {
+        if let yaml::Value::Map(m) = &mut n.value {
+            m.retain(|(k, _)| k != "aval");
+        }
+        n
+    }
+    match (yaml::parse(a), yaml::parse(b)) {
+        (Ok(x), Ok(y)) => yaml::same_values(&without_generator(x), &without_generator(y)),
+        _ => false,
     }
 }
 
@@ -558,7 +596,8 @@ pub fn standing(root: &Path, o: &Origin) -> Standing {
 /// still says what that commit said is the second question, and the one a
 /// re-resolution alone never asked.
 ///
-/// Only asked of a `Current` pack, on purpose. A `Behind` one is being replaced
+/// Only asked while the commit is unchanged (`moved` is the other fetch), on
+/// purpose. A `Behind` one is being replaced
 /// whatever its content says, and an `Unknown` one cannot be fetched to compare
 /// against — reporting both would be two lines about one re-vendoring.
 ///

@@ -144,8 +144,13 @@ pub fn head_slots(g: &Graph) -> Vec<Slot<'_>> {
 /// difference, which is the property byte comparison had and the one worth
 /// keeping.
 ///
-/// Applied to both sides, so it never has to decode an escape correctly: a
-/// mistake in `cell()` is made identically to the file and to the render.
+/// The one escape it does decode is a CommonMark backslash escape of ASCII
+/// punctuation inside a table cell (`\*` means `*`), because a formatter adds
+/// and drops those. The decoded text is re-encoded with `cell()`'s own
+/// escaping (`\` and `|`), so an escaped pipe stays distinct from a column
+/// split. Inside a backtick code span a backslash is literal and nothing is
+/// decoded. Applied to both sides, so a mistake in `cell()` is made
+/// identically to the file and to the render.
 pub fn canonicalise(text: &str) -> String {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut out = String::with_capacity(text.len());
@@ -181,11 +186,68 @@ fn canonical_row(line: &str) -> String {
         if is_delimiter_field(f) {
             out.push_str("---|");
         } else {
-            out.push_str(f);
+            out.push_str(&decode_cell(f));
             out.push('|');
         }
     }
     out
+}
+
+/// The ASCII punctuation CommonMark lets a backslash escape.
+const ASCII_PUNCTUATION: &str = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+
+/// Decode CommonMark backslash escapes in one left-to-right pass, skipping
+/// backtick code spans, and re-encode as `cell()` does.
+fn decode_cell(f: &str) -> String {
+    let chars: Vec<char> = f.chars().collect();
+    let mut decoded = String::with_capacity(f.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '`' {
+            let run = chars[i..].iter().take_while(|&&x| x == '`').count();
+            // A span closes at the next run of exactly the same length. With
+            // none, the backticks are literal text and decoding goes on.
+            let mut j = i + run;
+            let mut close = None;
+            while j < chars.len() {
+                if chars[j] == '`' {
+                    let r = chars[j..].iter().take_while(|&&x| x == '`').count();
+                    if r == run {
+                        close = Some(j + r);
+                        break;
+                    }
+                    j += r;
+                } else {
+                    j += 1;
+                }
+            }
+            match close {
+                Some(end) => {
+                    // Literal inside the span; already in `cell()` form.
+                    decoded.extend(chars[i..end].iter());
+                    i = end;
+                }
+                None => {
+                    decoded.extend(chars[i..i + run].iter());
+                    i += run;
+                }
+            }
+        } else if c == '\\' && i + 1 < chars.len() && ASCII_PUNCTUATION.contains(chars[i + 1]) {
+            match chars[i + 1] {
+                '\\' => decoded.push_str("\\\\"),
+                '|' => decoded.push_str("\\|"),
+                x => decoded.push(x),
+            }
+            i += 2;
+        } else {
+            // Not an escape (a backslash before a non-punctuation character
+            // is a literal one), and any other character is itself.
+            decoded.push(c);
+            i += 1;
+        }
+    }
+    decoded
 }
 
 /// `---`, `:---`, `---:` or `:---:` — the shapes a formatter writes for the
@@ -354,5 +416,68 @@ None.
         assert_eq!(cell("A\\|B"), "A\\\\\\|B");
         assert_eq!(split_unescaped(" a \\| b | c "), vec![" a \\| b ", " c "]);
         assert_eq!(cell("  padded  "), "padded");
+    }
+    #[test]
+    fn a_formatters_escaped_punctuation_is_formatting() {
+        let render = "| a.b | — | ADR-0001 | snake_case and * glob |\n";
+        let pretty = "| a.b | — | ADR-0001 | snake\\_case and \\* glob |\n";
+        assert!(same(pretty, render));
+        assert!(!same(
+            "| a.b | — | ADR-0001 | snakecase and * glob |\n",
+            render
+        ));
+    }
+
+    #[test]
+    fn an_escaped_pipe_is_not_a_column_split() {
+        assert!(!same("| a \\| b |\n", "| a | b |\n"));
+        assert!(same("| a \\| b |\n", "| a \\| b |\n"));
+    }
+
+    #[test]
+    fn an_escaped_backslash_equals_itself() {
+        let r = format!("| {} |\n", cell("a\\b"));
+        assert!(same(&r, &r));
+        assert!(!same(&r, "| ab |\n"));
+        assert_eq!(canonicalise(&r), canonicalise(&r.replace("  ", " ")));
+    }
+
+    #[test]
+    fn a_backslash_before_a_non_punctuation_character_is_untouched() {
+        assert_eq!(canonicalise("| a\\b |\n"), "|a\\b|\n");
+        assert!(!same("| a\\b |\n", "| ab |\n"));
+    }
+
+    #[test]
+    fn prettier_escaping_after_an_escaped_backslash_equals_the_render() {
+        let render = format!("| {} |\n", cell("a\\*"));
+        assert_eq!(render, "| a\\\\* |\n");
+        assert!(same(&render, "| a\\\\\\* |\n"));
+        assert!(!same(&render, "| a\\\\ |\n"));
+    }
+
+    #[test]
+    fn an_escaped_angle_bracket_and_backtick_decode_like_an_asterisk() {
+        assert!(same("| a \\< b |\n", "| a < b |\n"));
+        assert!(same("| a \\` b |\n", "| a ` b |\n"));
+        assert!(!same("| a \\< b |\n", "| a > b |\n"));
+    }
+
+    #[test]
+    fn inside_a_code_span_an_escape_is_literal() {
+        assert!(!same("| `a\\*b` |\n", "| `a*b` |\n"));
+        assert!(same("| `a\\*b` \\* |\n", "| `a\\*b` * |\n"));
+    }
+
+    #[test]
+    fn an_unbalanced_backtick_swallows_nothing() {
+        assert!(same("| a ` b \\* c |\n", "| a ` b * c |\n"));
+        assert!(same("| `` a ` b \\* c |\n", "| `` a ` b * c |\n"));
+    }
+
+    #[test]
+    fn the_escapable_set_is_the_ascii_punctuation() {
+        assert_eq!(ASCII_PUNCTUATION.chars().count(), 32);
+        assert!(ASCII_PUNCTUATION.chars().all(|c| c.is_ascii_punctuation()));
     }
 }

@@ -94,26 +94,43 @@ fn git(args: &[&str], in_dir: Option<&Path>) -> Result<String, String> {
     let mut child = c
         .spawn()
         .map_err(|e| format!("cannot run git: {} — it has to be on PATH", e))?;
-    loop {
+    // Both pipes are drained while git runs: a child that fills a pipe
+    // (~64 KB) blocks until someone reads, so waiting for exit first would
+    // deadlock on any larger output.
+    let out_reader = drain(child.stdout.take());
+    let err_reader = drain(child.stderr.take());
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(s)) => break s,
             Ok(None) => {}
             Err(e) => return Err(format!("waiting for git: {e}")),
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
+            // The reader threads are not joined: an ssh or git-remote-https
+            // grandchild may still hold the pipe open, and a join would hang.
             return Err("no answer within the budget".to_string());
         }
         std::thread::sleep(Duration::from_millis(20));
+    };
+    let stdout = out_reader.join().unwrap_or_default();
+    let stderr = err_reader.join().unwrap_or_default();
+    if !status.success() {
+        return Err(String::from_utf8_lossy(&stderr).trim().to_string());
     }
-    let o = child
-        .wait_with_output()
-        .map_err(|e| format!("waiting for git: {e}"))?;
-    if !o.status.success() {
-        return Err(String::from_utf8_lossy(&o.stderr).trim().to_string());
-    }
-    Ok(String::from_utf8_lossy(&o.stdout).to_string())
+    Ok(String::from_utf8_lossy(&stdout).to_string())
+}
+
+/// Read a pipe to its end on its own thread.
+fn drain<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut p) = pipe {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    })
 }
 
 /// Whether a spec is a filesystem path.
@@ -382,6 +399,46 @@ mod tests {
             elapsed < Duration::from_secs(5),
             "killed at the deadline, not at ssh's leisure: {elapsed:?}"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Under a budget, output larger than a pipe buffer is read while git
+    /// runs, not after: waiting for exit first would deadlock.
+    #[test]
+    fn a_budgeted_call_returns_output_larger_than_the_pipe_buffer() {
+        let dir = std::env::temp_dir().join(format!("aval-big-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let ok = Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .stdout(Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        run(&["-c", "init.templateDir=", "init", "-q"]);
+        std::fs::write(dir.join("big"), "y".repeat(200_000)).unwrap();
+        run(&["add", "big"]);
+        run(&[
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "user.name=t",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/nonexistent",
+            "commit",
+            "-qm",
+            "big",
+        ]);
+        // Process-wide, like the budget itself.
+        set_budget(20);
+        let got = git(&["show", "HEAD:big"], Some(&dir));
+        *DEADLINE.lock().unwrap() = None;
+        assert_eq!(got.unwrap().len(), 200_000);
         std::fs::remove_dir_all(&dir).ok();
     }
 
