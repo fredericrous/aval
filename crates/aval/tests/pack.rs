@@ -1105,10 +1105,7 @@ fn the_generator_version_is_not_a_declaration() {
     let fleet = producer("gen-fleet");
     let c = vendored_from(&fleet, "gen-consumer");
     let pack = fs::read_to_string(fleet.join("aval.pack")).unwrap();
-    assert!(
-        pack.contains("aval: \"1.9.0\"") || pack.contains("aval: \""),
-        "{pack}"
-    );
+    assert!(pack.lines().any(|l| l.starts_with("aval: ")), "{pack}");
     let bumped: String = pack
         .lines()
         .map(|l| {

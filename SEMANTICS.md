@@ -1250,9 +1250,11 @@ so `A\|B` in one cell stays different from `A | B` in two. Inside a backtick
 code span a backslash is literal and nothing is decoded; a backslash before a
 character that is not ASCII punctuation is not an escape and stays. Because the
 same function is applied to both sides, a mistake in it is made identically to
-the file and to the projection. It follows that `choice` and `reason` MUST be single-line: a
-table row has no escape for a newline, and one would split a record across
-several rows. That is a Layer A error, reported with its line.
+the file and to the projection.
+
+`choice` and `reason` MUST be single-line: a table row has no escape for a
+newline, and one would split a record across several rows. That is a Layer A
+error, reported with its line.
 
 `heads --write` leaves a file alone when it already states the projection, so a
 formatter's output is not undone on every run. **Anything not already current

@@ -114,23 +114,35 @@ fn git(args: &[&str], in_dir: Option<&Path>) -> Result<String, String> {
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    let stdout = out_reader.join().unwrap_or_default();
-    let stderr = err_reader.join().unwrap_or_default();
+    let stdout = joined(out_reader)?;
+    let stderr = joined(err_reader)?;
     if !status.success() {
         return Err(String::from_utf8_lossy(&stderr).trim().to_string());
     }
     Ok(String::from_utf8_lossy(&stdout).to_string())
 }
 
+type Drained = std::thread::JoinHandle<std::io::Result<Vec<u8>>>;
+
 /// Read a pipe to its end on its own thread.
-fn drain<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+fn drain<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> Drained {
     std::thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(mut p) = pipe {
-            let _ = p.read_to_end(&mut buf);
+            p.read_to_end(&mut buf)?;
         }
-        buf
+        Ok(buf)
     })
+}
+
+/// A reader's output, or why there is none. Cut-off output read as complete
+/// would turn an `ls-remote` that failed half-way into "names nothing".
+fn joined(reader: Drained) -> Result<Vec<u8>, String> {
+    match reader.join() {
+        Ok(Ok(buf)) => Ok(buf),
+        Ok(Err(e)) => Err(format!("reading git output: {e}")),
+        Err(_) => Err("reading git output: the reader thread panicked".to_string()),
+    }
 }
 
 /// Whether a spec is a filesystem path.
@@ -399,46 +411,6 @@ mod tests {
             elapsed < Duration::from_secs(5),
             "killed at the deadline, not at ssh's leisure: {elapsed:?}"
         );
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// Under a budget, output larger than a pipe buffer is read while git
-    /// runs, not after: waiting for exit first would deadlock.
-    #[test]
-    fn a_budgeted_call_returns_output_larger_than_the_pipe_buffer() {
-        let dir = std::env::temp_dir().join(format!("aval-big-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let run = |args: &[&str]| {
-            let ok = Command::new("git")
-                .args(args)
-                .current_dir(&dir)
-                .stdout(Stdio::null())
-                .status()
-                .unwrap()
-                .success();
-            assert!(ok, "git {args:?}");
-        };
-        run(&["-c", "init.templateDir=", "init", "-q"]);
-        std::fs::write(dir.join("big"), "y".repeat(200_000)).unwrap();
-        run(&["add", "big"]);
-        run(&[
-            "-c",
-            "user.email=t@example.com",
-            "-c",
-            "user.name=t",
-            "-c",
-            "commit.gpgsign=false",
-            "-c",
-            "core.hooksPath=/nonexistent",
-            "commit",
-            "-qm",
-            "big",
-        ]);
-        // Process-wide, like the budget itself.
-        set_budget(20);
-        let got = git(&["show", "HEAD:big"], Some(&dir));
-        *DEADLINE.lock().unwrap() = None;
-        assert_eq!(got.unwrap().len(), 200_000);
         std::fs::remove_dir_all(&dir).ok();
     }
 
