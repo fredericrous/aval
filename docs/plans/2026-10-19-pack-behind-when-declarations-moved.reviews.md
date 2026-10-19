@@ -1,0 +1,10 @@
+# Full reviews: a pack is behind only when its declarations moved
+
+- **backend**, round 1: approve-with-changes (38k tokens, 80 s). Findings: [high] a fetch failure after a move hides it, so it stays `behind`; [medium] decode in a single pass; [medium] observable verification rows; [low] three doc comments. All accepted.
+- **backend**, round 2: approve-with-changes (43k, 18 s). Carried: the deterministic 40-hex `rev` for the fetch-fail test; six tests, not four; pin the exact CurrentMoved line; an unbalanced backtick.
+- **backend**, Codex delta: approve-with-changes (52k, 31 s). Findings: [high] kill-and-reap with no join on the deadline, plus a regression under `--budget 2`; [medium] three CHANGELOG entries; [medium] a budgeted real-fleet row. All applied.
+- **backend**, final bind: approve-with-changes (51k, 63 s). Delta patches resolved. Carried: [medium] the four-vs-six count and the fetch-fail row wording; [low] the parse-error sentence should name the moved-commit comparison.
+- **lang:rust**, round 1: approve-with-changes (22k, 24 s). Accepted: the stale banner re-fetches on every check; an unparseable publication is `behind`; no decode inside code spans. Rejected as duplicates: the current-line wording (tui#1) and the doc comment (backend#4). Carried: an ASCII-punctuation constant.
+- **tui**, round 1: approve-with-changes (18k, 14 s). Accepted: the current line names the move; tests for `\<` and an escaped backtick. Rejected: the Unknown-exit test, superseded by backend#1. Carried: docs saying that re-add shows the diff.
+- **unix**, round 1: approve-with-changes (20k, 23 s). Accepted: a hand-edited pack whose source moved is `behind`. Rejected: budget-exhausted as Unknown (conflicts with backend#1); code spans (a duplicate of lang:rust#4); an Unknown non-zero exit (SEMANTICS says exit 0).
+- **codex**, final: rework. Findings: [blocking] the budgeted `git()` deadlocks on output over 64 KB (confirmed at `fetch.rs:97-112`); [medium] the generator `aval:` version counts as a declaration; [medium] `cargo-test` runs at pre-push, not pre-commit. All three applied, and backend re-ran.

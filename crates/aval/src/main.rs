@@ -1159,6 +1159,19 @@ fn cmd_add_check(args: &Args) -> i32 {
                     )
                 }
             }
+            add::Standing::CurrentMoved(now) => {
+                if !quiet {
+                    println!(
+                        "  {:<9} {} @ {}  ({}; {} now names {}, same declarations)",
+                        "current",
+                        o.name,
+                        aval::fetch::short(&o.commit),
+                        o.source,
+                        o.rev,
+                        aval::fetch::short(&now)
+                    )
+                }
+            }
             add::Standing::Edited => {
                 edited += 1;
                 println!(

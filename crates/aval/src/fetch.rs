@@ -94,26 +94,55 @@ fn git(args: &[&str], in_dir: Option<&Path>) -> Result<String, String> {
     let mut child = c
         .spawn()
         .map_err(|e| format!("cannot run git: {} — it has to be on PATH", e))?;
-    loop {
+    // Both pipes are drained while git runs: a child that fills a pipe
+    // (~64 KB) blocks until someone reads, so waiting for exit first would
+    // deadlock on any larger output.
+    let out_reader = drain(child.stdout.take());
+    let err_reader = drain(child.stderr.take());
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(s)) => break s,
             Ok(None) => {}
             Err(e) => return Err(format!("waiting for git: {e}")),
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
+            // The reader threads are not joined: an ssh or git-remote-https
+            // grandchild may still hold the pipe open, and a join would hang.
             return Err("no answer within the budget".to_string());
         }
         std::thread::sleep(Duration::from_millis(20));
+    };
+    let stdout = joined(out_reader)?;
+    let stderr = joined(err_reader)?;
+    if !status.success() {
+        return Err(String::from_utf8_lossy(&stderr).trim().to_string());
     }
-    let o = child
-        .wait_with_output()
-        .map_err(|e| format!("waiting for git: {e}"))?;
-    if !o.status.success() {
-        return Err(String::from_utf8_lossy(&o.stderr).trim().to_string());
+    Ok(String::from_utf8_lossy(&stdout).to_string())
+}
+
+type Drained = std::thread::JoinHandle<std::io::Result<Vec<u8>>>;
+
+/// Read a pipe to its end on its own thread.
+fn drain<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> Drained {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut p) = pipe {
+            p.read_to_end(&mut buf)?;
+        }
+        Ok(buf)
+    })
+}
+
+/// A reader's output, or why there is none. Cut-off output read as complete
+/// would turn an `ls-remote` that failed half-way into "names nothing".
+fn joined(reader: Drained) -> Result<Vec<u8>, String> {
+    match reader.join() {
+        Ok(Ok(buf)) => Ok(buf),
+        Ok(Err(e)) => Err(format!("reading git output: {e}")),
+        Err(_) => Err("reading git output: the reader thread panicked".to_string()),
     }
-    Ok(String::from_utf8_lossy(&o.stdout).to_string())
 }
 
 /// Whether a spec is a filesystem path.

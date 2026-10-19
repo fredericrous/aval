@@ -173,3 +173,21 @@ pub fn write(l: &Loaded) -> std::io::Result<Wrote> {
     std::fs::write(path(l), project::render(&l.graph))?;
     Ok(Wrote::Written)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// prettier escapes `*` as `\*` inside a table cell; that is formatting.
+    #[test]
+    fn a_prettier_escaped_asterisk_in_a_choice_is_current() {
+        let want = "| Key | Scope | Record | Decision |\n|---|---|---|---|\n\
+                    | a.b | — | ADR-0001 | Use `*` and * globs |\n";
+        let have = "| Key | Scope | Record   | Decision             |\n\
+                    | --- | ----- | -------- | -------------------- |\n\
+                    | a.b | —     | ADR-0001 | Use `*` and \\* globs |\n";
+        assert!(matches!(compare(have, want), Freshness::Current));
+        let edited = have.replace("globs", "maps");
+        assert!(matches!(compare(&edited, want), Freshness::Stale(_)));
+    }
+}

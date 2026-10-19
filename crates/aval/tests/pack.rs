@@ -998,3 +998,188 @@ fn add_creates_the_registry_it_vendors_into() {
     assert_eq!(run(&c, &["check"]).code, 0);
     assert_eq!(run(&c, &["resolve", "release.trigger"]).code, 0);
 }
+
+// --- a pack is behind only when its declarations moved ----------------------
+
+fn commit_all(dir: &Path, msg: &str) {
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-qm", msg]);
+}
+
+fn vendored_from(fleet: &Path, consumer: &str) -> PathBuf {
+    let c = consumer_pack_only(consumer);
+    assert_eq!(run(&c, &["add", "--as", "fleet", &src(fleet)]).code, 0);
+    c
+}
+
+#[test]
+fn a_docs_only_producer_commit_leaves_the_pack_current() {
+    let fleet = producer("docs-fleet");
+    let c = vendored_from(&fleet, "docs-consumer");
+    let old = fs::read_to_string(c.join(".adr/packs/fleet.pack")).unwrap();
+    let old_id = old
+        .lines()
+        .find_map(|l| l.strip_prefix("# commit: "))
+        .unwrap()
+        .to_string();
+
+    write(&fleet, "docs/plans/x.md", "# a plan\n");
+    commit_all(&fleet, "a plan");
+    let new_id = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&fleet)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let new_id = new_id.trim();
+
+    let got = run(&c, &["add", "--check"]);
+    assert_eq!(got.code, 0, "{}", got.all());
+    let want = format!(
+        "  current   fleet @ {}  ({}; HEAD now names {}, same declarations)",
+        &old_id[..7],
+        src(&fleet),
+        &new_id[..7]
+    );
+    assert!(got.out.contains(&want), "{}", got.out);
+
+    let quiet = run(&c, &["add", "--check", "--quiet"]);
+    assert_eq!(quiet.code, 0, "{}", quiet.all());
+    assert_eq!(quiet.out, "");
+    // The banner is not refreshed, so it is current the second time too.
+    let again = run(&c, &["add", "--check"]);
+    assert_eq!(again.code, 0, "{}", again.all());
+    assert!(again.out.contains(&want), "{}", again.out);
+}
+
+#[test]
+fn a_large_pack_is_compared_inside_the_budget() {
+    let fleet = scratch("big-fleet");
+    let big = "x".repeat(300_000);
+    write(
+        &fleet,
+        ".adr.yaml",
+        &FLEET_REGISTRY.replace("The SQL access layer", &big),
+    );
+    write(
+        &fleet,
+        "docs/adr/0002-sql.md",
+        &record(
+            "ADR-0002",
+            "stack.sql-layer",
+            Some("effect-stack"),
+            "\"@effect/sql\"",
+            "first: true",
+        ),
+    );
+    assert_eq!(run(&fleet, &["heads", "--write"]).code, 0);
+    assert_eq!(run(&fleet, &["pack", "--write"]).code, 0);
+    git_init(&fleet);
+    commit_all(&fleet, "corpus");
+    assert!(fs::metadata(fleet.join("aval.pack")).unwrap().len() >= 269_000);
+    let c = vendored_from(&fleet, "big-consumer");
+
+    write(&fleet, "docs/plans/x.md", "# a plan\n");
+    commit_all(&fleet, "a plan");
+    let got = run(&c, &["add", "--check", "--quiet", "--budget", "5"]);
+    assert_eq!(got.code, 0, "{}", got.all());
+    assert_eq!(got.out, "");
+
+    let pack = fs::read_to_string(fleet.join("aval.pack")).unwrap();
+    fs::write(
+        fleet.join("aval.pack"),
+        pack.replace("What starts a release", "Changed"),
+    )
+    .unwrap();
+    commit_all(&fleet, "changed declaration");
+    let got = run(&c, &["add", "--check", "--quiet", "--budget", "5"]);
+    assert_eq!(got.code, 1, "{}", got.all());
+    assert!(got.out.contains("behind"), "{}", got.out);
+}
+
+#[test]
+fn the_generator_version_is_not_a_declaration() {
+    let fleet = producer("gen-fleet");
+    let c = vendored_from(&fleet, "gen-consumer");
+    let pack = fs::read_to_string(fleet.join("aval.pack")).unwrap();
+    assert!(pack.lines().any(|l| l.starts_with("aval: ")), "{pack}");
+    let bumped: String = pack
+        .lines()
+        .map(|l| {
+            if l.starts_with("aval: ") {
+                "aval: \"99.0.0\"".to_string()
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    assert_ne!(bumped, pack);
+    fs::write(fleet.join("aval.pack"), bumped).unwrap();
+    commit_all(&fleet, "newer generator");
+
+    let got = run(&c, &["add", "--check"]);
+    assert_eq!(got.code, 0, "{}", got.all());
+    assert!(got.out.contains("same declarations"), "{}", got.out);
+    let quiet = run(&c, &["add", "--check", "--quiet"]);
+    assert_eq!(quiet.code, 0, "{}", quiet.all());
+    assert_eq!(quiet.out, "");
+
+    let pack = fs::read_to_string(fleet.join("aval.pack")).unwrap();
+    fs::write(
+        fleet.join("aval.pack"),
+        pack.replace("What starts a release", "Changed"),
+    )
+    .unwrap();
+    commit_all(&fleet, "changed declaration");
+    let got = run(&c, &["add", "--check"]);
+    assert_eq!(got.code, 1, "{}", got.all());
+    assert!(got.out.contains("behind"), "{}", got.out);
+}
+
+#[test]
+fn a_move_that_cannot_be_compared_stays_behind() {
+    // A 40-hex revision differing from the vendored commit and absent from
+    // the source: `resolve` answers offline, the fetch fails.
+    let fleet = producer("nofetch-fleet");
+    let c = vendored_from(&fleet, "nofetch-consumer");
+    let path = c.join(".adr/packs/fleet.pack");
+    let text = fs::read_to_string(&path).unwrap();
+    let edited = text.replace("# rev:    HEAD", &format!("# rev:    {}", "ab".repeat(20)));
+    assert_ne!(text, edited);
+    fs::write(&path, edited).unwrap();
+    let got = run(&c, &["add", "--check", "--budget", "5"]);
+    assert_eq!(got.code, 1, "{}", got.all());
+    assert!(got.out.contains("behind"), "{}", got.out);
+}
+
+#[test]
+fn an_unparseable_publication_after_a_move_is_behind() {
+    let fleet = producer("garbage-fleet");
+    let c = vendored_from(&fleet, "garbage-consumer");
+    fs::write(fleet.join("aval.pack"), "scopes: [\n  - : :\n\t bad").unwrap();
+    commit_all(&fleet, "broken pack");
+    let got = run(&c, &["add", "--check"]);
+    assert_eq!(got.code, 1, "{}", got.all());
+    assert!(got.out.contains("behind"), "{}", got.out);
+}
+
+#[test]
+fn a_hand_edited_pack_whose_source_moved_is_behind() {
+    let fleet = producer("editmoved-fleet");
+    let c = vendored_from(&fleet, "editmoved-consumer");
+    let path = c.join(".adr/packs/fleet.pack");
+    let edited = fs::read_to_string(&path)
+        .unwrap()
+        .replace("\"@effect/sql\"", "\"Kysely\"");
+    fs::write(&path, edited).unwrap();
+    write(&fleet, "docs/plans/x.md", "# a plan\n");
+    commit_all(&fleet, "a plan");
+    let got = run(&c, &["add", "--check"]);
+    assert_eq!(got.code, 1, "{}", got.all());
+    assert!(got.out.contains("behind"), "{}", got.out);
+}

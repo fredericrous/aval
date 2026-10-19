@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.9.1
+
+### Fixed
+
+- **`aval add --check` compares declarations, not commit ids.** A revision
+  that names a new commit whose pack declares the same thing (the top-level
+  `aval` generator version aside) is `current`, and the line says which
+  commit the revision now names. A fetch or parse failure after a move stays
+  `behind`.
+- **`aval heads --check` accepts a formatter's escaping.** A CommonMark
+  backslash escape of ASCII punctuation in a table cell (prettier writes `\*`)
+  is decoded during canonicalisation; code spans and the column split are
+  unchanged.
+- **The budgeted git call no longer deadlocks on output over the pipe
+  buffer.** Under `--budget` (the session hook) the child was waited for
+  before its output was read, so any pack over 64 KB was silently `unknown`
+  and `edited` or `behind` never reached the hook for large packs.
+
 ## v1.9.0
 
 ### Added

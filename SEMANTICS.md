@@ -302,7 +302,12 @@ are good ones.
 A vendored pack that is behind answers `active` with a decision that was
 superseded, which is the failure this tool exists to prevent. `aval add
 --check` re-resolves each recorded revision and reports whether it still names
-the recorded commit.
+the recorded commit. `behind` means the revision names a commit that publishes
+different declarations: when the commit moved but the declarations did not
+(the top-level `aval` generator version aside), the pack is `current`, and the
+line says which commit the revision now names. A published file that cannot be
+fetched or parsed after a move is `behind`, because the revision already
+answered that it moved.
 
 It reports one more standing, `edited`: the revision still names the recorded
 commit, and the vendored file no longer declares what that commit published.
@@ -311,9 +316,9 @@ same failure from the other side — a decision this repository believes another
 one made, that nobody made. It is counted with `behind` because one command
 fixes both: `aval add` writes what the source published. The comparison is
 declarational, so a file a formatter reformatted is `current`, not `edited`.
-The check is asked only of a pack that is otherwise current: a `behind` pack is
-being replaced whatever its content says, and an `unknown` one cannot be
-fetched to compare against.
+The check is asked only while the revision still names the recorded commit:
+once it names another, the comparison is against what that commit publishes,
+and an `unknown` pack cannot be fetched to compare against.
 
 It reaches the network, so **no hook, gate or `resolve` may call it**, and none
 does. A corpus that needed the network to answer a question would be useless
@@ -1226,6 +1231,7 @@ Canonicalisation normalises exactly these, and nothing else:
 | trailing blank lines at end of file | |
 | padding inside a table cell | |
 | the delimiter row's style, including alignment markers | |
+| a backslash escape of ASCII punctuation in a table cell | a formatter adds or drops them, and `\*` and `*` say the same thing |
 
 Everything else survives into the comparison. A row added, removed, reordered
 or altered is stale; so is an edited banner, an edited heading, or added prose.
@@ -1237,10 +1243,18 @@ the banner would compare equal and pass indefinitely.
 **Rows compare as an ordered sequence.** The projection is sorted, and nothing
 else would enforce that if a reordering counted as current.
 
-Because the same function is applied to both sides, it never has to decode an
-escape correctly. It follows that `choice` and `reason` MUST be single-line: a
-table row has no escape for a newline, and one would split a record across
-several rows. That is a Layer A error, reported with its line.
+A backslash escape of ASCII punctuation inside a table cell is decoded (`\X`
+becomes `X`, in one left-to-right pass, so `\\*` is a backslash then `*`) and
+the result is re-encoded the way the projection escapes a cell (`\` and `|`),
+so `A\|B` in one cell stays different from `A | B` in two. Inside a backtick
+code span a backslash is literal and nothing is decoded; a backslash before a
+character that is not ASCII punctuation is not an escape and stays. Because the
+same function is applied to both sides, a mistake in it is made identically to
+the file and to the projection.
+
+`choice` and `reason` MUST be single-line: a table row has no escape for a
+newline, and one would split a record across several rows. That is a Layer A
+error, reported with its line.
 
 `heads --write` leaves a file alone when it already states the projection, so a
 formatter's output is not undone on every run. **Anything not already current
