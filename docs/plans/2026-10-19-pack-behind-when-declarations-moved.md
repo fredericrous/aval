@@ -128,25 +128,33 @@ The local amont registry places `cargo-test` at pre-push, despite the nearby fle
 
 ## Phases
 
-- [ ] 1. Implementation, tests, spec, changelog, version, in the `aval-wt-pack-content` worktree
-- [ ] 2. PR, merge on green, tag `v1.9.1`, install the released binary on this machine
+- [x] 1. Implementation, tests, spec, changelog, version, in the `aval-wt-pack-content` worktree (relais run run-65e2c1db0b71d-24b4, sonnet@medium; review fixes by hand)
+- [ ] 2. PR, merge on green, tag `v1.9.1`, install the released binary on this machine. Its evidence is the PR checks and the `v1.9.1` release workflow, not this file.
 
 ## Verification
 
-| Check | Input | Expected |
-|---|---|---|
-| Unit and integration | `cargo test` | the new pack.rs test (docs-only producer commit → `current`, exit 0; `--quiet` → empty stdout) and the four project.rs tests are listed and pass; existing `behind` tests unchanged |
-| Hook end to end | remove the `~/.cache/aval/*.pack-check` stamp for amont, run `.claude/hooks/aval-heads.sh` there with the branch binary on PATH | no `BEHIND THEIR SOURCE` line |
-| Fetch fails after a move | pack.rs: producer moves, the second fetch fails (source made unreadable after `ls-remote`, or `--budget` exceeded) | `behind`, exit 1 |
-| Real fleet, budgeted, 269 KB pack | `time aval add --check --budget 5` (no `--quiet`: under `--quiet` an `unknown` is also empty stdout and exit 0, main.rs:1183-1208) in `~/Developer/Perso/amont` with the branch binary, then the same with the v1.9.0 binary | branch: every pack line reads `current`, no `unknown` line, exit 0, real < 5 s; v1.9.0: an `unknown` line after ~5 s |
-| Real fleet, commit moved, content same | `aval add --check` in `~/Developer/Perso/amont` (vendors 99ac9a7, HEAD names ee009f3) with the branch binary | `current`, exit 0 |
-| Real fleet, content moved | a consumer whose pack predates a record, simulated in a scratch copy by editing the banner commit and a key | `behind`, exit 1 |
-| Prettier round-trip | a scratch copy of website-builder with the `.prettierignore` line removed, `prettier --write docs/adr/HEADS.md`, then `aval heads --check` with the branch binary | `HEADS.md is current` |
-| Content edit still caught | the same copy with one decision's wording changed | `heads-fresh` finding |
-| Release | the `v1.9.1` release workflow conclusion, then `aval --version` on this machine | `success`; `aval 1.9.1` |
+Observed on 2026-10-19 with the branch binary (`target/debug/aval`) at 9d79a7a, before the push.
+
+| Check | Input | Expected | Actual |
+|---|---|---|---|
+| Unit and integration | `cargo test --workspace`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` | the new pack.rs tests and the project.rs tests pass; existing `behind` tests unchanged | 13 suites ok, 0 failed; clippy and fmt clean. New tests: 6 in pack.rs, 9 in project.rs, 1 in heads.rs |
+| Hook end to end | `.claude/hooks/aval-heads.sh` in amont, fresh `XDG_CACHE_HOME`, branch binary first on PATH; then with 1.9.0 | no `BEHIND THEIR SOURCE` line | branch: 0 lines; 1.9.0: 1 line |
+| Fetch fails after a move | pack.rs `a_move_that_cannot_be_compared_stays_behind`: a 40-hex `rev` absent from the source | `behind`, exit 1 | passes |
+| Real fleet, budgeted, 269 KB pack | scratch consumer vendoring amont's 269,463-byte pack at the source's HEAD (unmoved), `time aval add --check --budget 5` | branch: `current`, no `unknown`, exit 0, < 5 s; 1.9.0: `unknown` after ~5 s | branch: `current`, exit 0, 2.25 s; 1.9.0: `unknown … has no aval.pack at 2296a63`, exit 0, 5.03 s (the pipe deadlock) |
+| Real fleet, commit moved, content same | `time aval add --check --budget 5` in `~/Developer/Perso/amont` (vendors 99ac9a7; HEAD now 2296a63, docs-only commits since) | `current`, exit 0 | `current decisions @ 99ac9a7 (github:fredericrous/decisions; HEAD now names 2296a63, same declarations)`, exit 0, 2.9 s; 1.9.0: `behind`, exit 1 |
+| Real fleet, content moved | the scratch consumer with the banner at 99ac9a7 and one key description edited | `behind`, exit 1 | `behind decisions has 99ac9a7, HEAD now names 2296a63`, exit 1 |
+| Prettier round-trip | website-builder's `.adr.yaml`, `.adr`, `docs/adr` from HEAD (no `.prettierignore`), `prettier --write docs/adr/HEADS.md` (3.8.3, one `\*`), `aval heads --check` | `HEADS.md is current` | branch: `HEADS.md is current`; 1.9.0: `heads-fresh` |
+| Content edit still caught | the same copy with `frozen` changed to `thawed` in one decision | `heads-fresh` finding | 2 `heads-fresh` findings (says / is missing) |
 
 The branch binary runs from `target/`, never `cargo install`, so the
 machine binary is replaced only by the release (memory: a branch binary
 replaces the machine's one).
+
+## Implementation review
+
+approve-with-changes, then on the Delta approve-with-changes (its one remaining item is this commit).
+Fixed: a race on the process-wide budget between two fetch.rs tests (the duplicate test was dropped; pack.rs covers the path); pipe read errors now surfaced; SEMANTICS paragraph split; a redundant assertion.
+Fixed here: Actual column, Phase 1 ticked, Release moved to Phase 2's post-merge evidence.
+Round 1: 55k tokens, 73 s; Delta: 59k tokens, 26 s.
 
 <!-- panel: repos=aval reviewers=backend,lang:rust,tui,unix,codex body-sha=5b4f4ad2d4cc -->
