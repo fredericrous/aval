@@ -76,7 +76,7 @@ never reaches the place where code is written or judged:
   Lands after aval Phase 2 is released (unknown field is a Layer A error) and after each repo's aval pin (hooks, CI) is bumped before its pack refresh.
 - `aval pack --write`, `aval check`, regenerate HEADS.
 
-### Phase 2 — aval: `governs` and full text (repo `aval`)
+### [x] Phase 2 — aval: `governs` and full text (repo `aval`)
 
 - `crates/aval-core/src/rules.rs`: accept `governs` in `FILE_FIELDS`
   (values: `code`; absent = not code); `model.rs:153` `Rule.governs`.
@@ -191,5 +191,46 @@ never reaches the place where code is written or judged:
 - Cost: compare relais ledger cost per run for the 20 runs before and
   after (uncached: 55 KB/4 ≈ 14k tokens per worker attempt, plus ≈24k per reviewer; expected cost increase ≤ 15% per run; check `cache_read_input_tokens` on the second worker in one repo); record in the ADR's
   revisit note.
+
+## Decision log
+
+- 2026-10-23 — Phase 2 ran through relais (sonnet@medium); it stopped on
+  `scope_exceeded` because `conformance/corpora/rules-sample/.adr.yaml` is
+  protected configuration, which widening cannot pass. The candidate was
+  salvaged by hand (read, tested, `cargo fmt`), commit `28385eb`.
+- 2026-10-23 — The implementation review found new single-letter names in
+  the worker's code (`names.reveal-intent`), the failure this plan targets;
+  fixed with a typed `Governs` in `8bc4c8b`.
+- 2026-10-23 — The canonical plan lives in aval (built first); decisions,
+  relais and dotfiles carry pointer files.
+
+## Verification record
+
+Phase 2 (aval, `target/release/aval` on `conformance/corpora/rules-sample`):
+- `cargo test` → all suites green → 11 suites ok, 0 failed.
+- `rules --governs code` and `--governs=code` → only `governs: code` rules →
+  1 rule, `code.structure.small-units`, exit 0.
+- `--json rules --governs=code --full` → `governs` and `body` on each rule →
+  `[('code.structure.small-units', 'code', 103)]`.
+- plain `rules` → one line per rule → 4 lines, JSON 4 rules.
+- `rules --full` → `aval rule` text, `---` between rules → as expected; `| head -1` exits 0, no stderr.
+- `--governs foo`, bare `--governs`, `--index --full` → exit 2 with the named
+  message → all three exit 2 (bare `--governs` also prints the usage, as every
+  parse error does).
+- Help → new lines within 80 columns → yes (the one 89-column line predates this).
+- `--governs code` with the trait filter (test
+  `governs_composes_with_the_trait_filter`: `governs: code` + `applies: [cli]`,
+  areas name only `ui`) → rule omitted, counted in `omitted` → passes.
+- MCP `aval_rules {governs, full}` vs `aval rules --json --governs code --full`
+  → byte-equal → passes (`aval_rules_takes_governs_and_full`).
+- The relais check (52 code rules with bodies) belongs to Phases 1 and 3; it is
+  recorded there.
+
+## Implementation review
+
+- aval (Phase 2): round 1 approve-with-changes (53k, 55 s), Delta approve (65k, 21 s).
+- Fixed: new single-letter names, typed `Governs`, trait-filter test, MCP-vs-CLI
+  byte check, conformance README. Kept: test corpus binding `r` (file convention).
+- Next: release aval, then Phase 1 (`decisions`), Phase 3 (relais), Phase 4 (dotfiles).
 
 <!-- panel: repos=decisions,aval,relais,dotfiles reviewers=backend,lang:rust,tui,unix,codex body-sha=adee1394a250 -->
