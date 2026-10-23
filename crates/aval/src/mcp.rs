@@ -430,7 +430,10 @@ fn tools() -> Vec<Json> {
              does not have (a command line, a UI) are left out and counted in \
              `omitted`. Left out is NOT inapplicable-by-decision: the rules stay \
              active, aval_rule still explains them, and `all_traits: true` lists \
-             them.",
+             them.\n\n\
+             GOVERNS AND FULL: `governs: \"code\"` keeps only the rules whose file \
+             declares `governs: code`; `full: true` adds each rule's body, so one \
+             call reads them all.",
             schema(
                 vec![
                     (
@@ -465,6 +468,25 @@ fn tools() -> Vec<Json> {
                             "boolean",
                             "Include rules about traits this repository's areas \
                              do not name. Default false.",
+                        ),
+                    ),
+                    (
+                        "governs",
+                        Json::obj()
+                            .set("type", "string")
+                            .set("enum", vec!["code"])
+                            .set(
+                                "description",
+                                "`code` — only rules whose file declares \
+                                 `governs: code`. Omit for all.",
+                            ),
+                    ),
+                    (
+                        "full",
+                        prop(
+                            "boolean",
+                            "Give each rule's body too, as aval_rule would. \
+                             Default false.",
                         ),
                     ),
                     repo.clone(),
@@ -865,11 +887,29 @@ fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
                 Some(Json::Bool(b)) => *b,
                 Some(_) => return error(id, INVALID_PARAMS, "`all_traits` must be a boolean"),
             };
+            let governs = match opt_str(args, "governs") {
+                None => None,
+                Some("code") => Some("code".to_string()),
+                Some(x) => {
+                    return error(
+                        id,
+                        INVALID_PARAMS,
+                        &format!("`governs` is `code`, not `{}`", x),
+                    )
+                }
+            };
+            let full = match args.and_then(|a| a.get("full")) {
+                None => false,
+                Some(Json::Bool(b)) => *b,
+                Some(_) => return error(id, INVALID_PARAMS, "`full` must be a boolean"),
+            };
             Ask::Rules(render::Filter {
                 level,
                 adopted_by: opt_str(args, "adopted_by").map(str::to_string),
                 all,
                 all_traits,
+                governs,
+                full,
             })
         }
         "aval_rule" => match req_str(args, "id") {

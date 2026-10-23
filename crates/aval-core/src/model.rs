@@ -163,6 +163,9 @@ pub struct Rule {
     /// The traits this rule is about (SEMANTICS section 2.5). Empty means
     /// untargeted: the rule applies everywhere, exactly as before traits.
     pub applies: Vec<String>,
+    /// `Some("code")` when the rule governs code (SEMANTICS section 2.4);
+    /// `None` is not code.
+    pub governs: Option<String>,
     /// Repository-relative rules file, or the vendored pack file — the file in
     /// *this* repository a reader can open, exactly as `Adr.file` is.
     pub file: String,
@@ -190,6 +193,7 @@ impl Rule {
             body: String::new(),
             source: None,
             applies: Vec::new(),
+            governs: None,
             file: file.into(),
             pack: None,
         }

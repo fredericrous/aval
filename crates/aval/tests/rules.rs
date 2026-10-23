@@ -525,3 +525,116 @@ fn a_consumer_vendors_the_rules_with_the_decisions() {
     assert!(pack.contains("mine.own"), "{}", pack);
     assert!(!pack.contains("names.reveal-intent"), "{}", pack);
 }
+
+// --- governs and --full ------------------------------------------------------
+
+/// A corpus with one rule file that governs code and one that does not.
+fn governs_corpus(name: &str) -> PathBuf {
+    let r = scratch(name);
+    write(
+        &r,
+        ".adr.yaml",
+        "dir: docs/adr\nrules:\n  - docs/principles/book.md\n  - docs/principles/code.md\n\
+         scopes: [cloud]\nkeys:\n  a.b:\n",
+    );
+    write(&r, "docs/adr/0001-a.md", ADR);
+    write(&r, "docs/principles/book.md", RULES);
+    write(
+        &r,
+        "docs/principles/code.md",
+        "---\nadopts: ADR-0001\ngoverns: code\n---\n\
+         ## code.small [constraint]\n\nKeep it small.\n\nBecause small is readable.\n",
+    );
+    assert_eq!(run(&r, &["heads", "--write"]).code, 0);
+    r
+}
+
+#[test]
+fn governs_filters_and_plain_listing_stays_one_line_per_rule() {
+    let r = governs_corpus("governs-filter");
+    let all = run(&r, &["rules"]);
+    assert_eq!(all.out.lines().count(), 3, "{}", all.out);
+    for form in [
+        &["rules", "--governs", "code"][..],
+        &["rules", "--governs=code"][..],
+    ] {
+        let got = run(&r, form);
+        assert_eq!(got.code, 0, "{}", got.err);
+        assert_eq!(got.out.lines().count(), 1, "{}", got.out);
+        assert!(got.out.contains("code.small"), "{}", got.out);
+    }
+    let bad = run(&r, &["rules", "--governs", "docs"]);
+    assert_eq!(bad.code, 2);
+    assert!(
+        bad.err.contains("aval: `--governs` is `code`, not `docs`"),
+        "{}",
+        bad.err
+    );
+    assert_eq!(run(&r, &["rules", "--governs"]).code, 2);
+}
+
+#[test]
+fn full_prints_each_rule_as_rule_does() {
+    let r = governs_corpus("full");
+    let one = run(&r, &["rule", "code.small"]).out;
+    let full = run(&r, &["rules", "--governs", "code", "--full"]);
+    assert_eq!(full.code, 0, "{}", full.err);
+    assert_eq!(full.out, one);
+    let both = run(&r, &["rules", "--full"]).out;
+    assert!(both.contains("\n---\n"), "{}", both);
+    assert!(both.contains("private vocabulary"), "{}", both);
+
+    let j = run(&r, &["rules", "--json"]).out;
+    assert!(j.contains(r#""governs":"code""#), "{}", j);
+    assert!(j.contains(r#""governs":null"#), "{}", j);
+    assert!(!j.contains(r#""body""#), "{}", j);
+    let jf = run(&r, &["rules", "--json", "--full"]).out;
+    assert!(jf.contains(r#""body":"Because small"#), "{}", jf);
+
+    let idx = run(&r, &["rules", "--level", "constraint", "--index", "--full"]);
+    assert_eq!(idx.code, 2);
+    assert!(idx.err.contains("aval rules --full"), "{}", idx.err);
+}
+
+#[test]
+fn an_unknown_governs_value_is_a_load_error_naming_the_field() {
+    let r = governs_corpus("governs-bad");
+    write(
+        &r,
+        "docs/principles/code.md",
+        "---\nadopts: ADR-0001\ngoverns: prose\n---\n## code.small [constraint]\n\nSmall.\n",
+    );
+    let got = run(&r, &["rules"]);
+    assert_eq!(got.code, 3, "{}{}", got.out, got.err);
+    assert!(got.err.contains("`governs`"), "{}", got.err);
+}
+
+#[test]
+fn governs_survives_the_pack() {
+    let p = governs_corpus("governs-pack");
+    assert_eq!(run(&p, &["pack", "--write"]).code, 0);
+    let pack = fs::read_to_string(p.join("aval.pack")).unwrap();
+    assert!(pack.contains(r#"governs: "code""#), "{}", pack);
+    let c = scratch("governs-consumer");
+    write(&c, ".adr/packs/fleet.yaml", &pack);
+    write(
+        &c,
+        ".adr.yaml",
+        "dir: docs/adr\npacks:\n  - .adr/packs/fleet.yaml\nscopes: []\nkeys:\n  x.y:\n",
+    );
+    write(
+        &c,
+        "docs/adr/0001-x.md",
+        "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  \
+         - key: x.y\n    choice: Mine\n    first: true\n---\n# mine\n",
+    );
+    assert_eq!(run(&c, &["heads", "--write"]).code, 0);
+    let got = run(&c, &["rules", "--governs", "code", "--json"]);
+    assert!(
+        got.out.contains(r#""governs":"code""#),
+        "{}{}",
+        got.out,
+        got.err
+    );
+    assert!(got.out.contains(r#""pack":"fleet""#), "{}", got.out);
+}

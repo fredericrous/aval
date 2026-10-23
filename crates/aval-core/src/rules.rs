@@ -32,7 +32,7 @@
 use crate::model::*;
 use crate::yaml;
 
-const FILE_FIELDS: &[&str] = &["adopts", "source", "applies"];
+const FILE_FIELDS: &[&str] = &["adopts", "source", "applies", "governs"];
 
 fn a(msg: impl Into<String>) -> Finding {
     Finding::new(Layer::A, "rules-parse", msg)
@@ -231,6 +231,27 @@ pub fn parse(file: &str, src: &str) -> Result<Vec<Rule>, Vec<Finding>> {
     applies.sort();
     applies.dedup();
 
+    let governs = match doc.get("governs") {
+        None => None,
+        Some(n) if n.is_null() => None,
+        Some(n) => match n.as_str() {
+            Some("code") => Some("code".to_string()),
+            Some(s) => {
+                out.push(
+                    a(format!("`governs` is `code`, not `{}`", s)).at(file, n.line + offset - 1),
+                );
+                None
+            }
+            None => {
+                out.push(
+                    a(format!("`governs` must be `code`, found {}", n.kind()))
+                        .at(file, n.line + offset - 1),
+                );
+                None
+            }
+        },
+    };
+
     let lines: Vec<&str> = body.lines().collect();
     let mut spans: Vec<Span> = Vec::new();
     let mut fenced = false;
@@ -351,6 +372,7 @@ pub fn parse(file: &str, src: &str) -> Result<Vec<Rule>, Vec<Finding>> {
         rule.body = body;
         rule.source = source.clone();
         rule.applies = applies.clone();
+        rule.governs = governs.clone();
         rules.push(rule);
     }
 

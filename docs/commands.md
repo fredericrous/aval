@@ -13,7 +13,7 @@ to say what each one is for.
 | `aval show <ADR-NNNN>` | derived status of one record, including partial supersession |
 | `aval history <key> [--scope S]` | the chain, labelled as history rather than authority |
 | `aval heads [--write\|--check]` | the projection; `--write` regenerates `HEADS.md`, `--check` says whether it is stale |
-| `aval rules [--level L] [--adopted-by R] [--all] [--all-traits]` | the rules the decisions have adopted, one line each. See [rules and traits](rules-and-traits.md) |
+| `aval rules [--level L] [--adopted-by R] [--all] [--all-traits] [--governs code] [--full]` | the rules the decisions have adopted, one line each; `--governs code` keeps rules whose file declares `governs: code`, `--full` prints each rule's text (not with `--index`). See [rules and traits](rules-and-traits.md) |
 | `aval rule <id>` | one rule, with its translation and why |
 | `aval traits [--summary\|--detect\|--check]` | what this repository says it is, and what its tracked files suggest |
 

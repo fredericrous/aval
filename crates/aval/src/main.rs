@@ -63,9 +63,11 @@ USAGE
     aval rules [--level <level>]           the adopted rules, one line each;
                [--adopted-by <record>]     --level constraint|heuristic, --all
                [--all] [--all-traits]      adds the inactive ones with the reason,
-               [--index]                   --all-traits the ones about traits
-                                           this repository's areas do not name,
-                                           --index only their ids, by prefix
+               [--index] [--governs code]  --all-traits the ones about traits
+               [--full]                    this repository's areas do not name,
+                                           --index only their ids, by prefix,
+                                           --governs code only code rules,
+                                           --full each rule's text
     aval traits [--summary]                what this repository says it is, and
                 [--detect | --check]       what its tracked files suggest;
                                            ADVISORY detection, never a filter
@@ -102,6 +104,8 @@ OPTIONS
     --all         rules: inactive rules too, each with the reason
     --all-traits  rules: rules for every trait, not only this repository's
     --index       rules: ids grouped by prefix, one line each; needs --level
+    --governs     rules: only those declaring `governs: code`
+    --full        rules: each rule's body too, as `aval rule` prints it
     --summary     traits: the one line the session hook prints
     --detect      traits: propose `areas:` from the tracked files
     --all-repos   resolve, keys, heads, history, rules: ask every corpus `aval repos`
@@ -143,6 +147,10 @@ struct Args {
     all_traits: bool,
     /// `rules`: ids grouped by prefix instead of one statement per line.
     index: bool,
+    /// `rules`: only rules whose file declares this `governs` value.
+    governs: Option<String>,
+    /// `rules`: each rule with its body.
+    full: bool,
     summary: bool,
     detect: bool,
     write: bool,
@@ -185,6 +193,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         all_repos: false,
         all_traits: false,
         index: false,
+        governs: None,
+        full: false,
         summary: false,
         detect: false,
         write: false,
@@ -210,6 +220,16 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--all-repos" => a.all_repos = true,
             "--all-traits" => a.all_traits = true,
             "--index" => a.index = true,
+            "--full" => a.full = true,
+            "--governs" => {
+                i += 1;
+                a.governs = Some(
+                    argv.get(i)
+                        .ok_or("`--governs` is `code`, not nothing")?
+                        .clone(),
+                );
+            }
+            s if s.starts_with("--governs=") => a.governs = Some(s[10..].to_string()),
             "--summary" => a.summary = true,
             "--detect" => a.detect = true,
             "--write" => a.write = true,
@@ -562,6 +582,14 @@ fn cmd_rules(args: &Args) -> i32 {
         );
         return E_USAGE;
     }
+    if args.index && args.full {
+        eprintln!("aval: `aval rules --full` prints every rule's text and cannot be combined with --index");
+        return E_USAGE;
+    }
+    if let Some(g) = args.governs.as_deref().filter(|g| *g != "code") {
+        eprintln!("aval: `--governs` is `code`, not `{}`", g);
+        return E_USAGE;
+    }
     let level = match args.level.as_deref() {
         None => None,
         Some(l) => match aval_core::model::Level::parse(l) {
@@ -580,6 +608,8 @@ fn cmd_rules(args: &Args) -> i32 {
         adopted_by: args.adopted_by.clone(),
         all: args.all,
         all_traits: args.all_traits,
+        governs: args.governs.clone(),
+        full: args.full,
     };
     if args.all_repos {
         return all_repos(args, |l, _| render::rules_in(l, &filter));

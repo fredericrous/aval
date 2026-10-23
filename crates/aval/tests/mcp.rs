@@ -695,6 +695,48 @@ fn the_rule_tools_answer_what_the_cli_answers() {
     assert_eq!(err_code(&replies[5]), -32602);
 }
 
+/// `governs` and `full` on `aval_rules`, byte-equal to the CLI flags.
+#[test]
+fn aval_rules_takes_governs_and_full() {
+    let r = corpus("rules-governs");
+    write(
+        &r,
+        ".adr.yaml",
+        &format!(
+            "{}rules:\n  - docs/p/book.md\n  - docs/p/code.md\n",
+            REGISTRY
+        ),
+    );
+    write(
+        &r,
+        "docs/p/book.md",
+        "---\nadopts: ADR-0001\n---\n## names.reveal-intent [constraint]\n\nNames.\n",
+    );
+    write(
+        &r,
+        "docs/p/code.md",
+        "---\nadopts: ADR-0001\ngoverns: code\n---\n\
+         ## code.small [constraint]\n\nSmall.\n\nBecause readable.\n",
+    );
+    let replies = exchange(
+        &r,
+        &[
+            &call("aval_rules", r#"{"governs":"code"}"#),
+            &call("aval_rules", r#"{"governs":"code","full":true}"#),
+            &call("aval_rules", r#"{"governs":"docs"}"#),
+            &call("aval_rules", r#"{"full":"yes"}"#),
+        ],
+    );
+    let (one, _) = tool_result(&replies[0]);
+    assert_eq!(
+        one.get("rules").and_then(|x| x.as_arr()).map(<[Json]>::len),
+        Some(1)
+    );
+    assert!(content(&replies[1], 0).contains("Because readable."));
+    assert_eq!(err_code(&replies[2]), -32602);
+    assert_eq!(err_code(&replies[3]), -32602);
+}
+
 /// Traits on the tool surface: `aval_rules` filters and reports `omitted`
 /// exactly as `aval rules --json` does, `all_traits` lifts the filter, and
 /// `aval_traits` is byte-equal to `aval traits --json`.
