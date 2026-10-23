@@ -3,6 +3,7 @@ rules:
   - docs/principles/naming.md
   - docs/principles/proposed.md
   - docs/principles/early.md
+  - docs/principles/code.md
 scopes: []
 keys:
   code.naming:

@@ -62,6 +62,16 @@ here.
 adds the inactive ones, each with the reason it is inactive. `--index` needs
 `--level` and refuses `--json`, `--all` and `--all-repos`.
 
+## Code rules and full text
+
+A rule file whose rules govern how code is written says so with `governs: code`
+in its frontmatter (the only value; absent means not code, any other value is
+an error). It travels in the pack. `aval rules --governs code` lists only those
+rules, after the trait filter. `aval rules --full` prints each rule as `aval
+rule <id>` does, separated by a blank line and a `---` line; with `--json` every
+rule carries `governs` (string or null) and `--full` adds `body`. `--full`
+refuses `--index`. The MCP `aval_rules` tool takes `governs` and `full`.
+
 ## Traits: rules that only apply where the thing exists
 
 Rules about command-line programs mean nothing in a repository that ships none.

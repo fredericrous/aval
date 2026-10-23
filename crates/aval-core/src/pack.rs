@@ -61,6 +61,7 @@ const RULE_FIELDS: &[&str] = &[
     "adopts",
     "source",
     "applies",
+    "governs",
     "statement",
     "body",
 ];
@@ -246,6 +247,9 @@ pub fn render(c: &Corpus) -> String {
             if !r.applies.is_empty() {
                 let v: Vec<&str> = r.applies.iter().map(String::as_str).collect();
                 o.push_str(&list("    applies", &v, "      "));
+            }
+            if let Some(governs) = r.governs {
+                o.push_str(&format!("    governs: {}\n", out(governs.as_str())));
             }
             o.push_str(&format!("    statement: {}\n", out(&r.statement)));
             if !r.body.is_empty() {
@@ -590,6 +594,22 @@ fn rule(
             out.push(a("pack-parses", m).at(file, node.line));
         }
     }
+    let governs = match want(node, "governs", file, out) {
+        None => None,
+        Some(text) => match Governs::parse(&text) {
+            Some(kind) => Some(kind),
+            None => {
+                out.push(
+                    a(
+                        "pack-parses",
+                        format!("`governs` is `code`, not `{}`", text),
+                    )
+                    .at(file, node.line),
+                );
+                None
+            }
+        },
+    };
     // The clip newline a literal block scalar ends with is the block's, not the
     // body's: the body is stored trimmed, so render → parse → render is fixed.
     let body = want(node, "body", file, out)
@@ -603,6 +623,7 @@ fn rule(
     r.body = body;
     r.source = source;
     r.applies = applies;
+    r.governs = governs;
     r.pack = Some(pack.to_string());
     Some(r)
 }

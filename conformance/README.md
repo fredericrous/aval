@@ -22,7 +22,7 @@ own, `undecided` and `contradiction` included. Its rules are in its own header.
 | `diamond` | two branches replacing one predecessor, then a reconciliation absorbing both |
 | `contradiction` | the same corpus without the reconciliation, so competing heads are observable |
 | `retire-scoped` | a scope opting out of an inherited default |
-| `rules-sample` | rules: two constraints and a heuristic under a live record, one under a draft, one under a replaced record — so every reason a rule can be inactive has an instance |
+| `rules-sample` | rules: two constraints and a heuristic under a live record, one under a draft, one under a replaced record, and a file declaring `governs: code` — so every reason a rule can be inactive has an instance |
 | `traits-sample` | traits: one rule per targeting shape (a trait, another trait, a trait no area names, `applies: []`, no `applies`) and one area per row of the applicability table — overlapping, `[]`, uncovered |
 | `traits-none` | the same rules with no `areas`, so nothing is filtered and nothing reports that it was |
 | `relevance-sample` | relevance: a replaced record whose title still says what the key is about, a record naming a literal path and a glob, a key decided only at a scope, a key declared and undecided, and a rule to rank beside them |

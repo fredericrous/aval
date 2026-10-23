@@ -32,7 +32,7 @@
 use crate::model::*;
 use crate::yaml;
 
-const FILE_FIELDS: &[&str] = &["adopts", "source", "applies"];
+const FILE_FIELDS: &[&str] = &["adopts", "source", "applies", "governs"];
 
 fn a(msg: impl Into<String>) -> Finding {
     Finding::new(Layer::A, "rules-parse", msg)
@@ -231,6 +231,30 @@ pub fn parse(file: &str, src: &str) -> Result<Vec<Rule>, Vec<Finding>> {
     applies.sort();
     applies.dedup();
 
+    let governs = match doc.get("governs") {
+        None => None,
+        Some(node) if node.is_null() => None,
+        Some(node) => match node.as_str() {
+            Some(text) => match Governs::parse(text) {
+                Some(kind) => Some(kind),
+                None => {
+                    out.push(
+                        a(format!("`governs` is `code`, not `{}`", text))
+                            .at(file, node.line + offset - 1),
+                    );
+                    None
+                }
+            },
+            None => {
+                out.push(
+                    a(format!("`governs` must be `code`, found {}", node.kind()))
+                        .at(file, node.line + offset - 1),
+                );
+                None
+            }
+        },
+    };
+
     let lines: Vec<&str> = body.lines().collect();
     let mut spans: Vec<Span> = Vec::new();
     let mut fenced = false;
@@ -351,6 +375,7 @@ pub fn parse(file: &str, src: &str) -> Result<Vec<Rule>, Vec<Finding>> {
         rule.body = body;
         rule.source = source.clone();
         rule.applies = applies.clone();
+        rule.governs = governs;
         rules.push(rule);
     }
 

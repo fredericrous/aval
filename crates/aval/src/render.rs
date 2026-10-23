@@ -8,7 +8,7 @@ use crate::provenance::{self, Provenance};
 use aval_core::applicability::{self, Omitted, Scope};
 use aval_core::graph::{DerivedStatus, Graph, Inconsistent, Unknown, Verdict};
 use aval_core::json::Json;
-use aval_core::model::{Adr, AdrId, Finding, Level, Rule, Slot};
+use aval_core::model::{Adr, AdrId, Finding, Governs, Level, Rule, Slot};
 use aval_core::pack::Pack;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -501,6 +501,10 @@ pub struct Filter {
     /// Rules for every trait, not only the ones this repository's areas name
     /// (SEMANTICS section 2.5).
     pub all_traits: bool,
+    /// Only rules whose file declares `governs: <this>`.
+    pub governs: Option<Governs>,
+    /// Each rule with its body (`aval rules --full`).
+    pub full: bool,
 }
 
 /// The rules a filter selects, in the order they are printed.
@@ -519,6 +523,10 @@ fn selected<'a>(g: &'a Graph, f: &Filter) -> (Vec<(&'a Rule, Option<String>)>, O
             f.adopted_by
                 .as_deref()
                 .map_or(true, |a| r.adopts.as_str() == a)
+        })
+        .filter(|rule| {
+            f.governs
+                .map_or(true, |wanted| rule.governs == Some(wanted))
         })
         .map(|r| (r, g.rule_reason(r)))
         .filter(|(_, reason)| f.all || reason.is_none())
@@ -587,6 +595,11 @@ fn rule_row_json(r: &Rule, reason: &Option<String>) -> Json {
                     .collect::<Vec<Json>>()
             }),
         )
+        .set(
+            "governs",
+            r.governs
+                .map_or(Json::Null, |governs| Json::from(governs.as_str())),
+        )
         .set("file", r.file.as_str())
         .set_opt("pack", r.pack.clone())
         .set("active", reason.is_none())
@@ -597,7 +610,14 @@ pub fn rules_json(g: &Graph, f: &Filter) -> Json {
     let (rows, omitted) = selected(g, f);
     let rows: Vec<Json> = rows
         .iter()
-        .map(|(r, reason)| rule_row_json(r, reason))
+        .map(|(rule, reason)| {
+            let row = rule_row_json(rule, reason);
+            if f.full {
+                row.set("body", rule.body.as_str())
+            } else {
+                row
+            }
+        })
         .collect();
     Json::obj()
         .set("rules", rows)
@@ -615,6 +635,10 @@ pub fn rules_omitted(g: &Graph, f: &Filter) -> Option<Omitted> {
 /// stderr.
 pub fn rules_text(g: &Graph, f: &Filter) -> String {
     let (rows, _) = selected(g, f);
+    if f.full {
+        let texts: Vec<String> = rows.iter().map(|(rule, _)| rule_text(g, rule)).collect();
+        return texts.join("\n---\n\n");
+    }
     // Padded to the longest id in what is actually printed, so the statements
     // line up and a short list is not padded to a long id it does not contain.
     let width = rows.iter().map(|(r, _)| r.id.len()).max().unwrap_or(0);

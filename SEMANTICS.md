@@ -374,6 +374,17 @@ source in this estate's terms, and the restatement is what was agreed to; the
 source is why. An agent invoking remembered book advice against a written rule
 is not citing an authority, it is **contradicting a decision**.
 
+#### The `governs` field
+
+A rule file MAY carry `governs: code`, the only value: its rules govern how
+code is written, as opposed to how a process runs. Absent means not code. Any
+other value is a Layer A error naming the field. The field travels in a pack.
+`aval rules --governs code` lists only those rules (after the trait filter), and
+`aval rules --full` prints each rule's body as `aval rule <id>` does, rules
+separated by a blank line and a `---` line; `--json` carries `governs` on every
+rule and `--full` adds `body`. `--full` cannot be combined with `--index`. The
+`aval_rules` tool takes `governs` and `full` with the same meaning.
+
 #### Rule files
 
 The registry lists rule files as literal repository-relative paths, exactly as

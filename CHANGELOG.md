@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`governs: code` on a rule file, `aval rules --governs code` and `--full`.**
+  The field travels in a pack; `--full` prints each rule as `aval rule <id>`
+  does (and adds `body` to `--json`), and every rule in `--json` carries
+  `governs`. The `aval_rules` tool takes `governs` and `full`.
+
 ## v1.9.1
 
 ### Fixed
