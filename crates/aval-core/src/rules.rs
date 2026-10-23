@@ -233,19 +233,22 @@ pub fn parse(file: &str, src: &str) -> Result<Vec<Rule>, Vec<Finding>> {
 
     let governs = match doc.get("governs") {
         None => None,
-        Some(n) if n.is_null() => None,
-        Some(n) => match n.as_str() {
-            Some("code") => Some("code".to_string()),
-            Some(s) => {
-                out.push(
-                    a(format!("`governs` is `code`, not `{}`", s)).at(file, n.line + offset - 1),
-                );
-                None
-            }
+        Some(node) if node.is_null() => None,
+        Some(node) => match node.as_str() {
+            Some(text) => match Governs::parse(text) {
+                Some(kind) => Some(kind),
+                None => {
+                    out.push(
+                        a(format!("`governs` is `code`, not `{}`", text))
+                            .at(file, node.line + offset - 1),
+                    );
+                    None
+                }
+            },
             None => {
                 out.push(
-                    a(format!("`governs` must be `code`, found {}", n.kind()))
-                        .at(file, n.line + offset - 1),
+                    a(format!("`governs` must be `code`, found {}", node.kind()))
+                        .at(file, node.line + offset - 1),
                 );
                 None
             }
@@ -372,7 +375,7 @@ pub fn parse(file: &str, src: &str) -> Result<Vec<Rule>, Vec<Finding>> {
         rule.body = body;
         rule.source = source.clone();
         rule.applies = applies.clone();
-        rule.governs = governs.clone();
+        rule.governs = governs;
         rules.push(rule);
     }
 

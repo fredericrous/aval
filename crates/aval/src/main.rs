@@ -229,7 +229,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                         .clone(),
                 );
             }
-            s if s.starts_with("--governs=") => a.governs = Some(s[10..].to_string()),
+            flag if flag.starts_with("--governs=") => a.governs = Some(flag[10..].to_string()),
             "--summary" => a.summary = true,
             "--detect" => a.detect = true,
             "--write" => a.write = true,
@@ -586,10 +586,16 @@ fn cmd_rules(args: &Args) -> i32 {
         eprintln!("aval: `aval rules --full` prints every rule's text and cannot be combined with --index");
         return E_USAGE;
     }
-    if let Some(g) = args.governs.as_deref().filter(|g| *g != "code") {
-        eprintln!("aval: `--governs` is `code`, not `{}`", g);
-        return E_USAGE;
-    }
+    let governs = match args.governs.as_deref() {
+        None => None,
+        Some(text) => match aval_core::model::Governs::parse(text) {
+            Some(kind) => Some(kind),
+            None => {
+                eprintln!("aval: `--governs` is `code`, not `{}`", text);
+                return E_USAGE;
+            }
+        },
+    };
     let level = match args.level.as_deref() {
         None => None,
         Some(l) => match aval_core::model::Level::parse(l) {
@@ -608,7 +614,7 @@ fn cmd_rules(args: &Args) -> i32 {
         adopted_by: args.adopted_by.clone(),
         all: args.all,
         all_traits: args.all_traits,
-        governs: args.governs.clone(),
+        governs,
         full: args.full,
     };
     if args.all_repos {

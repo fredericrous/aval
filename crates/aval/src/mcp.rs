@@ -28,7 +28,7 @@ use crate::load;
 use crate::relevant;
 use crate::render;
 use aval_core::json::Json;
-use aval_core::model::DEFAULT_SCOPE;
+use aval_core::model::{Governs, DEFAULT_SCOPE};
 use std::io::{BufRead, Write};
 use std::path::Path;
 
@@ -474,7 +474,7 @@ fn tools() -> Vec<Json> {
                         "governs",
                         Json::obj()
                             .set("type", "string")
-                            .set("enum", vec!["code"])
+                            .set("enum", vec![Governs::Code.as_str()])
                             .set(
                                 "description",
                                 "`code` — only rules whose file declares \
@@ -889,18 +889,20 @@ fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
             };
             let governs = match opt_str(args, "governs") {
                 None => None,
-                Some("code") => Some("code".to_string()),
-                Some(x) => {
-                    return error(
-                        id,
-                        INVALID_PARAMS,
-                        &format!("`governs` is `code`, not `{}`", x),
-                    )
-                }
+                Some(text) => match Governs::parse(text) {
+                    Some(kind) => Some(kind),
+                    None => {
+                        return error(
+                            id,
+                            INVALID_PARAMS,
+                            &format!("`governs` is `code`, not `{}`", text),
+                        )
+                    }
+                },
             };
-            let full = match args.and_then(|a| a.get("full")) {
+            let full = match args.and_then(|arguments| arguments.get("full")) {
                 None => false,
-                Some(Json::Bool(b)) => *b,
+                Some(Json::Bool(full)) => *full,
                 Some(_) => return error(id, INVALID_PARAMS, "`full` must be a boolean"),
             };
             Ask::Rules(render::Filter {

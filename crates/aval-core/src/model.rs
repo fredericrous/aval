@@ -141,6 +141,28 @@ impl fmt::Display for Level {
     }
 }
 
+/// What a rule file says its rules govern. Today only code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Governs {
+    Code,
+}
+
+impl Governs {
+    /// The one place a `governs` value is validated; `None` for any other text.
+    pub fn parse(s: &str) -> Option<Governs> {
+        match s {
+            "code" => Some(Governs::Code),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Governs::Code => "code",
+        }
+    }
+}
+
 /// One rule: a statement of practice, adopted by a record.
 ///
 /// A rule has no authority of its own. It is active exactly while the record
@@ -163,9 +185,8 @@ pub struct Rule {
     /// The traits this rule is about (SEMANTICS section 2.5). Empty means
     /// untargeted: the rule applies everywhere, exactly as before traits.
     pub applies: Vec<String>,
-    /// `Some("code")` when the rule governs code (SEMANTICS section 2.4);
-    /// `None` is not code.
-    pub governs: Option<String>,
+    /// What the rule governs (SEMANTICS section 2.4); `None` is not code.
+    pub governs: Option<Governs>,
     /// Repository-relative rules file, or the vendored pack file — the file in
     /// *this* repository a reader can open, exactly as `Adr.file` is.
     pub file: String,

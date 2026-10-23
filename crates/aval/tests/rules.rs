@@ -584,12 +584,16 @@ fn full_prints_each_rule_as_rule_does() {
     assert!(both.contains("\n---\n"), "{}", both);
     assert!(both.contains("private vocabulary"), "{}", both);
 
-    let j = run(&r, &["rules", "--json"]).out;
-    assert!(j.contains(r#""governs":"code""#), "{}", j);
-    assert!(j.contains(r#""governs":null"#), "{}", j);
-    assert!(!j.contains(r#""body""#), "{}", j);
-    let jf = run(&r, &["rules", "--json", "--full"]).out;
-    assert!(jf.contains(r#""body":"Because small"#), "{}", jf);
+    let listing = run(&r, &["rules", "--json"]).out;
+    assert!(listing.contains(r#""governs":"code""#), "{}", listing);
+    assert!(listing.contains(r#""governs":null"#), "{}", listing);
+    assert!(!listing.contains(r#""body""#), "{}", listing);
+    let full_listing = run(&r, &["rules", "--json", "--full"]).out;
+    assert!(
+        full_listing.contains(r#""body":"Because small"#),
+        "{}",
+        full_listing
+    );
 
     let idx = run(&r, &["rules", "--level", "constraint", "--index", "--full"]);
     assert_eq!(idx.code, 2);
@@ -611,25 +615,25 @@ fn an_unknown_governs_value_is_a_load_error_naming_the_field() {
 
 #[test]
 fn governs_survives_the_pack() {
-    let p = governs_corpus("governs-pack");
-    assert_eq!(run(&p, &["pack", "--write"]).code, 0);
-    let pack = fs::read_to_string(p.join("aval.pack")).unwrap();
+    let pack_repo = governs_corpus("governs-pack");
+    assert_eq!(run(&pack_repo, &["pack", "--write"]).code, 0);
+    let pack = fs::read_to_string(pack_repo.join("aval.pack")).unwrap();
     assert!(pack.contains(r#"governs: "code""#), "{}", pack);
-    let c = scratch("governs-consumer");
-    write(&c, ".adr/packs/fleet.yaml", &pack);
+    let consumer = scratch("governs-consumer");
+    write(&consumer, ".adr/packs/fleet.yaml", &pack);
     write(
-        &c,
+        &consumer,
         ".adr.yaml",
         "dir: docs/adr\npacks:\n  - .adr/packs/fleet.yaml\nscopes: []\nkeys:\n  x.y:\n",
     );
     write(
-        &c,
+        &consumer,
         "docs/adr/0001-x.md",
         "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  \
          - key: x.y\n    choice: Mine\n    first: true\n---\n# mine\n",
     );
-    assert_eq!(run(&c, &["heads", "--write"]).code, 0);
-    let got = run(&c, &["rules", "--governs", "code", "--json"]);
+    assert_eq!(run(&consumer, &["heads", "--write"]).code, 0);
+    let got = run(&consumer, &["rules", "--governs", "code", "--json"]);
     assert!(
         got.out.contains(r#""governs":"code""#),
         "{}{}",
@@ -637,4 +641,35 @@ fn governs_survives_the_pack() {
         got.err
     );
     assert!(got.out.contains(r#""pack":"fleet""#), "{}", got.out);
+}
+
+#[test]
+fn governs_composes_with_the_trait_filter() {
+    let r = scratch("governs-traits");
+    write(
+        &r,
+        ".adr.yaml",
+        "dir: docs/adr\ntraits: [cli, ui]\nrules:\n  - docs/principles/code.md\n\
+         areas:\n  \"web/**\": [ui]\nscopes: [cloud]\nkeys:\n  a.b:\n",
+    );
+    write(&r, "docs/adr/0001-a.md", ADR);
+    write(
+        &r,
+        "docs/principles/code.md",
+        "---\nadopts: ADR-0001\ngoverns: code\napplies: [cli]\n---\n\
+         ## code.cli-small [constraint]\n\nKeep it small.\n",
+    );
+    assert_eq!(run(&r, &["heads", "--write"]).code, 0);
+
+    let text = run(&r, &["rules", "--governs", "code"]);
+    assert_eq!(text.code, 0, "{}", text.err);
+    assert!(!text.out.contains("code.cli-small"), "{}", text.out);
+
+    let listing = run(&r, &["rules", "--governs", "code", "--json"]).out;
+    assert!(listing.contains(r#""rules":[]"#), "{}", listing);
+    assert!(
+        listing.contains(r#""omitted":{"constraints":1,"heuristics":0,"traits":["ui"]}"#),
+        "{}",
+        listing
+    );
 }

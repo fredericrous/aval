@@ -729,8 +729,18 @@ fn aval_rules_takes_governs_and_full() {
     );
     let (one, _) = tool_result(&replies[0]);
     assert_eq!(
-        one.get("rules").and_then(|x| x.as_arr()).map(<[Json]>::len),
+        one.get("rules")
+            .and_then(|rules| rules.as_arr())
+            .map(<[Json]>::len),
         Some(1)
+    );
+    assert_eq!(
+        content(&replies[0], 0).trim(),
+        cli(&r, &["rules", "--json", "--governs", "code"]).trim()
+    );
+    assert_eq!(
+        content(&replies[1], 0).trim(),
+        cli(&r, &["rules", "--json", "--governs", "code", "--full"]).trim()
     );
     assert!(content(&replies[1], 0).contains("Because readable."));
     assert_eq!(err_code(&replies[2]), -32602);
