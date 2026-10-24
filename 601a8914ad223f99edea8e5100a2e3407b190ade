@@ -1,0 +1,15 @@
+amont-provenance-v1
+commit 7e523fcabab2c7ed7ee4db074c4c741cb96fa031
+tree 601a8914ad223f99edea8e5100a2e3407b190ade
+canon 807325fcd1eb171698d57417560928d954e46c7d
+plan docs/plans/2026-10-23-code-rules-reach-writers-reviewers.md 619257ab3f4e152558ffbc54ee30e1311026890f4db6d2132bc639397e17b00c
+review reviewed 34353f1bb7bb8c0937b9be6e91bc5b2defba50e69e66aa36ebb1e34baea79e99
+preview not-required
+producer amont-agent 3.1.0
+
+-----BEGIN SSH SIGNATURE-----
+U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg7UOvJ8myo4dhW907VFty7T/bUV
+RFQerK+MWJ4bjChwcAAAAQYW1vbnQtcHJvdmVuYW5jZQAAAAAAAAAGc2hhNTEyAAAAUwAA
+AAtzc2gtZWQyNTUxOQAAAEBtcdruwscK6su3UTIgSUkGbNaWyR4WkNOZzKY3f8AIqA7JeV
+SBPB/Hw0vYMSj8nSG6i2v0InLmfshlJmuSxfgI
+-----END SSH SIGNATURE-----
