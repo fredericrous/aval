@@ -58,7 +58,7 @@ never reaches the place where code is written or judged:
 
 ## Approach
 
-### Phase 1 — decisions: mark which rules govern code (repo `decisions`)
+### [x] Phase 1 — decisions: mark which rules govern code (repo `decisions`)
 
 - New ADR (next number) "A reviewer reads the full text of the rules that
   govern code": rule files gain `governs: code`; such constraints are
@@ -97,7 +97,7 @@ never reaches the place where code is written or judged:
 - Release via `tag-release`; `aval add` refresh in each repo vendoring the
   `decisions` pack (relais `.adr/packs/decisions.pack`, …) after Phase 1.
 
-### Phase 3 — relais: workers and reviewer get the code rules (repo `relais`)
+### [x] Phase 3 — relais: workers and reviewer get the code rules (repo `relais`) — shipped; two live checks pending (Outcome)
 
 - `context/guidance.rs`: `rules_args` becomes `aval rules --level constraint --full --json`
   (one spawn); `code_rules` are those with `governs: code`, the rest feed
@@ -150,7 +150,7 @@ never reaches the place where code is written or judged:
   rules with a gap, old-aval fallback; the JSON fixture is captured from
   the released aval.
 
-### Phase 4 — implementation-review gets the same text (chezmoi-managed `~/.claude`)
+### [x] Phase 4 — implementation-review gets the same text (chezmoi-managed `~/.claude`)
 
 - `skills/worktree-task/SKILL.md:183`: brief carries `aval rules --level
   constraint --governs code --full --json` plus `aval rules --level constraint`
@@ -232,5 +232,61 @@ Phase 2 (aval, `target/release/aval` on `conformance/corpora/rules-sample`):
 - Fixed: new single-letter names, typed `Governs`, trait-filter test, MCP-vs-CLI
   byte check, conformance README. Kept: test corpus binding `r` (file convention).
 - Next: release aval, then Phase 1 (`decisions`), Phase 3 (relais), Phase 4 (dotfiles).
+
+## Outcome
+
+Shipped 2026-10-24: aval 1.10.0 (aval#42, #43), decisions ADR-0043 and
+`governs: code` on eight rule files (decisions#86), relais v0.31.0 (relais#298,
+#299), the implementation-review brief and agent (dotfiles#46). Each repo's
+pointer plan holds its own verification record.
+
+Live checks on relais 0.31.0 (coordinator restarted on the new binary):
+- Worker and reviewer guidance → a dispatched run's manifest carries the code
+  rules → 55 code rules, 29 other constraints in the index, aval 1.10.0, no gap
+  (the plan's 52 was an id-prefix estimate; the `governs: code` files hold 55).
+- A patch adding `const r = store.router; return r`, with an objective that
+  dictates no body → a finding citing `names.reveal-intent` and a non-pass
+  outcome → `needs_review`, finding at `routing.ts:98-99`, tagged `[low]`.
+- The same patch with an objective that dictated that exact body → the reviewer
+  weighed the rule and deferred to the contract → accepted. The drill was badly
+  posed; recorded, not landed.
+
+Phase 4 checks: recorded in the dotfiles pointer plan (dotfiles#46). On briefs
+built by the new F4b step, the implementation-review agent gave blocking
+findings for a seeded single-letter binding (`names.reveal-intent`) and for a
+deletion-only patch removing a subprocess timeout
+(`reliability.every-wait-is-bounded`, old-side line). Which agent text the
+subagent loaded mid-session is not provable; the next session's first review
+checks the new verdict wording.
+
+Not done yet:
+- Workers holding the three `mcp__aval__*` tools: refreshing the Claude Code
+  plugin is the person's command; the check runs in the next session.
+- The override check (a patch covered by an overriding decision draws no
+  finding): no repository has a decision that overrides a code rule; it needs
+  one built for the purpose.
+- The deletion-only drill through a relais review (it ran only through the
+  implementation-review agent): next session.
+- A worker whose repository differs from the session's reaching aval through
+  MCP: next session, with the plugin refreshed.
+- Negative control (a clean patch reviewed with no code-rule finding) and the
+  count of repairs caused by rule findings over 20 runs: due with the cost
+  check, about 2026-11-07.
+- Pull rate over the first 50 workers (baseline 0 Bash / 7 MCP) and cost per
+  run over 20 runs before and after (expected rise at most 15%): about
+  2026-11-07, from the relais ledger and transcripts.
+
+Follow-ups surfaced:
+- The reviewer tags a single-letter name `[low]` when the file already uses
+  the same short name ("a style point"), although ADR-0043 makes a violation
+  the diff introduces blocking; with v0.30.0's severities a `[low]` buys one
+  automatic repair first. Decide whether the reviewer prompt should say a local
+  convention does not lower a code-rule finding.
+- Scoped decisions: reviewers carry default-scope verdicts only
+  (`holds-until:` in relais `runner/review/mod.rs`).
+- `ui` rule files (`design-system`, `measures`, `i18n`) are not `governs: code`.
+- The reviewer decisions room counts framing bytes (relais, low).
+- A mechanical naming lint, and the existing ~800 single-letter names in relais
+  (non-goals of this plan).
 
 <!-- panel: repos=decisions,aval,relais,dotfiles reviewers=backend,lang:rust,tui,unix,codex body-sha=adee1394a250 -->
