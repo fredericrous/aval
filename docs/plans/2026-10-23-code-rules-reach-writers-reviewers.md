@@ -97,7 +97,7 @@ never reaches the place where code is written or judged:
 - Release via `tag-release`; `aval add` refresh in each repo vendoring the
   `decisions` pack (relais `.adr/packs/decisions.pack`, …) after Phase 1.
 
-### [x] Phase 3 — relais: workers and reviewer get the code rules (repo `relais`) — shipped; two live checks pending (Outcome)
+### [x] Phase 3 — relais: workers and reviewer get the code rules (repo `relais`) — shipped; override check pending (Outcome)
 
 - `context/guidance.rs`: `rules_args` becomes `aval rules --level constraint --full --json`
   (one spawn); `code_rules` are those with `governs: code`, the rest feed
@@ -259,16 +259,25 @@ deletion-only patch removing a subprocess timeout
 subagent loaded mid-session is not provable; the next session's first review
 checks the new verdict wording.
 
+Next-session checks (2026-10-24, plugin 0.31.0 loaded):
+- A worker reaches aval through MCP → an inspect run asking for an ADR-0043
+  choice and a rule body → the worker called `aval_resolve` and `aval_rule`
+  with `repo: "relais"` (the main checkout, not `task`) and quoted both.
+- Deletion-only patch through a relais review → a candidate deleting the
+  deadline in `wait_for_tick` (coordinator) → blocking finding citing
+  `reliability.every-wait-is-bounded` at the old-side lines, tracing the
+  reconcile loop that would never run again, and `needs_review`. The
+  objective dictated the deletion; the reviewer held that a task does not
+  override a rule (contrast the dictated `const r`, where it deferred).
+- The implementation-review verdict wording, in a session that loaded the
+  new agent file → the seeded single-letter diff → `approve-with-changes`
+  with a blocking `names.reveal-intent` finding (it was `rework` in the
+  session that predated the file: agent definitions load at session start).
+
 Not done yet:
-- Workers holding the three `mcp__aval__*` tools: refreshing the Claude Code
-  plugin is the person's command; the check runs in the next session.
 - The override check (a patch covered by an overriding decision draws no
   finding): no repository has a decision that overrides a code rule; it needs
   one built for the purpose.
-- The deletion-only drill through a relais review (it ran only through the
-  implementation-review agent): next session.
-- A worker whose repository differs from the session's reaching aval through
-  MCP: next session, with the plugin refreshed.
 - Negative control (a clean patch reviewed with no code-rule finding) and the
   count of repairs caused by rule findings over 20 runs: due with the cost
   check, about 2026-11-07.
