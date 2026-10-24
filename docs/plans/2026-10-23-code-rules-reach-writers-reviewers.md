@@ -265,6 +265,8 @@ Not done yet:
 - The override check (a patch covered by an overriding decision draws no
   finding): no repository has a decision that overrides a code rule; it needs
   one built for the purpose.
+- The deletion-only drill through a relais review (it ran only through the
+  implementation-review agent): next session.
 - A worker whose repository differs from the session's reaching aval through
   MCP: next session, with the plugin refreshed.
 - Negative control (a clean patch reviewed with no code-rule finding) and the
