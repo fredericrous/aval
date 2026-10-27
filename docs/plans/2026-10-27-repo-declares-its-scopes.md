@@ -89,7 +89,7 @@ raised. Scratch branches never pushed; runs abandoned; candidate fed back
 
 ## Phases
 
-### Phase 1 — aval 1.11.0 (repo `aval`)
+### [x] Phase 1 — aval 1.11.0 (repo `aval`)
 
 - `crates/aval-core/src/parse.rs`: add `in_scopes` to `REGISTRY_FIELDS`
   (`:20-32`), parse like `scopes` (`:682`, reject `*`); `model.rs` Registry gains
@@ -221,5 +221,47 @@ size). `monorepo` / `single-package` are not declared: no record decides at them
 - Unflagged `contradiction` (exit 5) verdicts fleet-wide: target 0. One that is
   not a real corpus disagreement → revert that repository's `in_scopes` line and
   fix aval before redeclaring.
+
+## Verification record
+
+Phase 1 (aval, branch binary; `cargo test` green through the pre-commit gate):
+- customer-vision's corpus copied to a scratch dir, `aval resolve
+  ui.design-system` → undecided before `in_scopes` → exit 4, undecided.
+- Same with `in_scopes: [effect-stack, duro-stack]` → active ADR-0006 at
+  duro-stack → active decisions:ADR-0006, `matched_scope: duro-stack`,
+  `scope_source: in_scopes`.
+- `aval resolve stack.effects-runtime` → active ADR-0001 at effect-stack →
+  active decisions:ADR-0001, scope effect-stack.
+- `--scope '*'` → unchanged → undecided, exit 4.
+- `aval check` → clean → 41 records, no findings.
+- `relevant --json` → top-level `scope` stays a string, `scopes` lists the
+  declared scopes, scoped keys ranked → `scope "*"`, `scopes [effect-stack,
+  duro-stack]`, `stack.sql-layer` active at effect-stack.
+- `traits --summary` → names the scopes → "scopes here: effect-stack,
+  duro-stack (aval resolve answers at them)".
+- Two declared scopes deciding one key differently → exit 5 naming both →
+  conformance case `in_scopes_two_records_disagreeing_contradict` passes
+  (`by_scope` effect-stack/ADR-0009, duro-stack/ADR-0010).
+- A pack carrying `in_scopes` → refused → test
+  `a_pack_carrying_in_scopes_is_refused` passes (exit 1, "a pack carries no
+  `in_scopes`").
+- A declared scope's own contradiction → `scope_source: in_scopes` → test
+  `a_declared_scopes_own_contradiction_is_sourced_from_in_scopes` passes, and
+  fails with the `render.rs` arm removed (mutation run).
+
+## Decision log
+
+- 2026-10-27 — Phase 1 ran as relais tasks: 1A stopped `scope_exceeded` on
+  the conformance corpus `.adr.yaml` (protected configuration) and was
+  salvaged by hand; 1B and two review-fix rounds; the orchestrator added the
+  tests the workers skipped and renamed single-letter names the reviewers
+  caught (`names.reveal-intent`).
+
+## Implementation review
+
+- aval (Phase 1): round 1 approve-with-changes (105k, 145 s) — 3 blocking
+  rule findings (banners, an output-parameter helper, one-letter names), all
+  fixed; Delta approve-with-changes (117k, 35 s), its two lows done here.
+- Next: release aval 1.11.0, then Phase 2 (decisions ADR-0046).
 
 <!-- panel: repos=aval,decisions,relais,dotfiles reviewers=architect,backend,po,lang:rust,unix,codex body-sha=62783cdbc00f -->
