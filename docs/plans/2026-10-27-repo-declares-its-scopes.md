@@ -256,6 +256,9 @@ Phase 1 (aval, branch binary; `cargo test` green through the pre-commit gate):
   salvaged by hand; 1B and two review-fix rounds; the orchestrator added the
   tests the workers skipped and renamed single-letter names the reviewers
   caught (`names.reveal-intent`).
+- 2026-10-27 — aval's own CI pinned 1.9.0, which cannot read `governs` in the
+  refreshed pack; pinned 1.10.0 (reviewed as a Delta). The pin moves to 1.11.0
+  before aval's own `.adr.yaml` ever declares `in_scopes`.
 
 ## Implementation review
 
