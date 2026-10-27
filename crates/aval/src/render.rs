@@ -8,7 +8,7 @@ use crate::provenance::{self, Provenance};
 use aval_core::applicability::{self, Omitted, Scope};
 use aval_core::graph::{DerivedStatus, Graph, Inconsistent, Unknown, Verdict};
 use aval_core::json::Json;
-use aval_core::model::{Adr, AdrId, Finding, Governs, Level, Rule, Slot};
+use aval_core::model::{Adr, AdrId, Finding, Governs, Level, Rule, Slot, DEFAULT_SCOPE};
 use aval_core::pack::Pack;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -50,12 +50,13 @@ pub fn answer<'a>(
         Verdict::Contradiction {
             heads,
             matched_scope,
+            ..
         } => heads
             .iter()
             .map(|id| {
                 let at = Slot {
                     key,
-                    scope: matched_scope,
+                    scope: matched_scope.as_deref().unwrap_or(DEFAULT_SCOPE),
                 };
                 let found = g
                     .heads(at)
@@ -169,29 +170,50 @@ pub fn verdict_json(v: &Verdict, slot: Slot<'_>, prov: &[(AdrId, Provenance)]) -
         Verdict::Contradiction {
             heads,
             matched_scope,
-        } => base
-            .set(
-                "heads",
-                heads
-                    .iter()
-                    .map(|h| {
-                        let p = prov.iter().find(|(id, _)| id == h);
-                        Json::obj().set("adr", h.as_str()).set(
-                            "provenance",
+            by_scope,
+        } => {
+            let json = base
+                .set(
+                    "heads",
+                    heads
+                        .iter()
+                        .map(|h| {
+                            let p = prov.iter().find(|(id, _)| id == h);
+                            Json::obj().set("adr", h.as_str()).set(
+                                "provenance",
+                                Json::obj()
+                                    .set(
+                                        "state",
+                                        p.map(|(_, x)| x.token()).unwrap_or("unavailable"),
+                                    )
+                                    .set_opt(
+                                        "commit",
+                                        p.and_then(|(_, x)| match x {
+                                            Provenance::Committed(s) => Some(s.clone()),
+                                            _ => None,
+                                        }),
+                                    ),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .set_opt("matched_scope", matched_scope.clone());
+            if by_scope.is_empty() {
+                json
+            } else {
+                json.set(
+                    "by_scope",
+                    by_scope
+                        .iter()
+                        .map(|(scope, adr)| {
                             Json::obj()
-                                .set("state", p.map(|(_, x)| x.token()).unwrap_or("unavailable"))
-                                .set_opt(
-                                    "commit",
-                                    p.and_then(|(_, x)| match x {
-                                        Provenance::Committed(s) => Some(s.clone()),
-                                        _ => None,
-                                    }),
-                                ),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .set("matched_scope", matched_scope.as_str()),
+                                .set("scope", scope.as_str())
+                                .set("adr", adr.as_str())
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
         Verdict::Unknown {
             what, suggestion, ..
         } => {

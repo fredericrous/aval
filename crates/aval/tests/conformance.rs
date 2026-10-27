@@ -50,8 +50,11 @@ fn want_str<'a>(exp: &'a Json, k: &str) -> Option<&'a str> {
 
 fn run_resolve(case_name: &str, g: &Graph, q: &Json, exp: &Json) {
     let key = want_str(q, "key").expect("query.key");
-    let scope = want_str(q, "scope").unwrap_or(DEFAULT_SCOPE);
-    let v = g.resolve(key, scope).expect("the fixture corpus resolves");
+    let v = match want_str(q, "scope") {
+        Some(scope) => g.resolve(key, scope),
+        None => g.resolve_default(key),
+    }
+    .expect("the fixture corpus resolves");
 
     if let Some(want) = want_str(exp, "verdict") {
         assert_eq!(v.token(), want, "{}: verdict", case_name);
@@ -99,6 +102,27 @@ fn run_resolve(case_name: &str, g: &Graph, q: &Json, exp: &Json) {
                 case_name
             ),
             other => panic!("{}: expected unknown, got {:?}", case_name, other),
+        }
+    }
+    if let Some(want) = exp.get("by_scope").and_then(|value| value.as_arr()) {
+        match &v {
+            Verdict::Contradiction { by_scope, .. } => {
+                let want: Vec<(&str, &str)> = want
+                    .iter()
+                    .map(|row| {
+                        (
+                            want_str(row, "scope").expect("by_scope.scope"),
+                            want_str(row, "adr").expect("by_scope.adr"),
+                        )
+                    })
+                    .collect();
+                let got: Vec<(&str, &str)> = by_scope
+                    .iter()
+                    .map(|(scope, adr)| (scope.as_str(), adr.as_str()))
+                    .collect();
+                assert_eq!(got, want, "{}: by_scope", case_name);
+            }
+            other => panic!("{}: expected contradiction, got {:?}", case_name, other),
         }
     }
     if let Some(want) = exp.get("heads").and_then(|x| x.as_arr()) {

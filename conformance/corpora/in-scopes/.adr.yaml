@@ -1,0 +1,25 @@
+# A repository on two stacks: it declares them in `in_scopes`, and a query with
+# no scope is answered at each of them from its own slot.
+dir: docs/adr
+scopes: [effect-stack, duro-stack, cloud]
+in_scopes: [effect-stack, duro-stack]
+keys:
+  stack.sql-layer:
+    description: How application code reaches SQL
+    scopes: [effect-stack]
+  ui.design-system:
+    description: Which design system the UI uses
+    scopes: [duro-stack]
+  release.trigger:
+    description: What causes a published artifact
+  tooling.formatter:
+    description: Which formatter the repository runs
+  tooling.linter:
+    description: Which linter the repository runs
+  test.runner:
+    description: Which test runner the repository runs
+  build.tool:
+    description: Which build tool the repository runs
+  cloud.region:
+    description: Which region a deployment lands in
+    scopes: [cloud]

@@ -32,8 +32,12 @@ pub enum Verdict {
     Contradiction {
         heads: Vec<AdrId>,
         /// The slot that actually disagreed, which may be the default scope
-        /// reached by fallback rather than the one asked about.
-        matched_scope: String,
+        /// reached by fallback rather than the one asked about. `None` when
+        /// several declared scopes answered, so no single slot disagreed.
+        matched_scope: Option<String>,
+        /// (scope, adr) of every answering entry when declared scopes
+        /// disagree with each other; empty for a single-slot contradiction.
+        by_scope: Vec<(String, String)>,
     },
     Unknown {
         what: Unknown,
@@ -192,6 +196,7 @@ impl Graph {
         let mut f = Vec::new();
         check_ids_unique(&corpus, &mut f);
         check_vocabulary(&corpus, &mut f);
+        check_in_scopes(&corpus, &mut f);
         check_edges(&corpus, &mut f);
         check_retirements(&corpus, &mut f);
         check_cycles(&corpus, &mut f);
@@ -291,13 +296,85 @@ impl Graph {
         self.resolve_at(key, scope, scope)
     }
 
+    /// SEMANTICS section 5, default query scope: answer at the scopes the
+    /// repository declares in `in_scopes`, from each scope's own slot only.
+    pub fn resolve_default(&self, key: &str) -> Result<Verdict, Inconsistent> {
+        let answering = self.answering_scopes(key);
+        match answering.as_slice() {
+            [] => self.resolve(key, DEFAULT_SCOPE),
+            [only] => self.resolve_at(key, only, only),
+            several => {
+                let mut by_scope = Vec::new();
+                for scope in several {
+                    for (adr, _) in self.heads(Slot { key, scope }) {
+                        by_scope.push((scope.to_string(), adr.id.as_str().to_string()));
+                    }
+                }
+                let mut heads: Vec<AdrId> = several
+                    .iter()
+                    .flat_map(|scope| self.heads(Slot { key, scope }))
+                    .map(|(adr, _)| adr.id.clone())
+                    .collect();
+                heads.sort();
+                heads.dedup();
+                Ok(Verdict::Contradiction {
+                    heads,
+                    matched_scope: None,
+                    by_scope,
+                })
+            }
+        }
+    }
+
+    /// The declared scopes that admit `key` and hold an entry in their own
+    /// slot. A scope that would only inherit the default head is not one.
+    fn answering_scopes<'s>(&'s self, key: &str) -> Vec<&'s str> {
+        let registry = &self.corpus.registry;
+        if !registry.has_key(key) {
+            return Vec::new();
+        }
+        registry
+            .in_scopes
+            .iter()
+            .filter(|scope| registry.admits(key, scope))
+            .filter(|scope| self.occupied(Slot { key, scope }))
+            .map(|scope| scope.as_str())
+            .collect()
+    }
+
+    /// Check findings for keys that more than one declared scope answers.
+    /// Warnings: they never make `check` fail.
+    pub fn in_scopes_conflicts(&self) -> Vec<Finding> {
+        self.corpus
+            .registry
+            .keys
+            .iter()
+            .filter_map(|def| {
+                let answering = self.answering_scopes(&def.name);
+                (answering.len() > 1).then(|| {
+                    Finding::new(
+                        Layer::B,
+                        "in-scopes-conflict",
+                        format!(
+                            "`{}` is answered by more than one declared scope ({}); narrow \
+                             `in_scopes` or decide the key at one scope",
+                            def.name,
+                            answering.join(", ")
+                        ),
+                    )
+                })
+            })
+            .collect()
+    }
+
     fn resolve_at(&self, key: &str, scope: &str, queried: &str) -> Result<Verdict, Inconsistent> {
         let slot = Slot { key, scope };
         let h = self.heads(slot);
         if h.len() > 1 {
             return Ok(Verdict::Contradiction {
                 heads: h.iter().map(|(a, _)| a.id.clone()).collect(),
-                matched_scope: scope.to_string(),
+                matched_scope: Some(scope.to_string()),
+                by_scope: Vec::new(),
             });
         }
         if let Some((adr, e)) = h.first() {
@@ -452,6 +529,23 @@ fn check_ids_unique(c: &Corpus, out: &mut Vec<Finding>) {
                 )
                 .in_file(adr.file.clone()),
             );
+        }
+    }
+}
+
+fn check_in_scopes(c: &Corpus, out: &mut Vec<Finding>) {
+    for scope in &c.registry.in_scopes {
+        if !c.registry.has_scope(scope) {
+            let hint = suggest(scope, c.registry.scopes.iter().map(|known| known.as_str()))
+                .map(|near| format!("; did you mean `{}`", near))
+                .unwrap_or_default();
+            out.push(a(
+                "in-scopes-declared",
+                format!(
+                    "`in_scopes` names `{}`, which is not in the registry{}",
+                    scope, hint
+                ),
+            ));
         }
     }
 }

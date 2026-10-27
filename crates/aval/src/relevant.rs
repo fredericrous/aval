@@ -849,10 +849,8 @@ fn shorten(s: &str) -> String {
 fn matched_scope(v: &aval_core::graph::Verdict) -> Option<&str> {
     match v {
         aval_core::graph::Verdict::Active { matched_scope, .. }
-        | aval_core::graph::Verdict::Retired { matched_scope, .. }
-        | aval_core::graph::Verdict::Contradiction { matched_scope, .. } => {
-            Some(matched_scope.as_str())
-        }
+        | aval_core::graph::Verdict::Retired { matched_scope, .. } => Some(matched_scope.as_str()),
+        aval_core::graph::Verdict::Contradiction { matched_scope, .. } => matched_scope.as_deref(),
         _ => None,
     }
 }

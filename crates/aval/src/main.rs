@@ -812,6 +812,14 @@ fn cmd_check(args: &Args) -> i32 {
     findings.extend(manual_index(&l));
     findings.sort_by_key(|a| (a.layer, a.file.clone(), a.line));
 
+    // Warnings: the same condition as a cross-scope exit 5, reported before a
+    // query meets it. They never change the exit status.
+    if !args.json {
+        for warning in l.graph.in_scopes_conflicts() {
+            eprintln!("warning: {}", warning);
+        }
+    }
+
     if args.json {
         let j = Json::obj()
             .set("ok", findings.is_empty())
