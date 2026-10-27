@@ -1901,3 +1901,72 @@ fn the_tool_description_says_it_resolves_nothing() {
     assert!(d.contains("RESOLVES NOTHING"), "{}", d);
     assert!(d.contains("aval_resolve"), "{}", d);
 }
+
+// --- in_scopes: no scope argument is not `*` --------------------------------
+
+fn in_scopes_corpus(name: &str) -> PathBuf {
+    let root = scratch(name);
+    write(
+        &root,
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [cloud]\nin_scopes: [cloud]\nkeys:\n  db.engine:\n",
+    );
+    write(
+        &root,
+        "docs/adr/0001-engine.md",
+        "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  - key: db.engine\n    scope: cloud\n    \
+         choice: Postgres\n    first: true\n---\n# engine\n",
+    );
+    root
+}
+
+#[test]
+fn aval_resolve_without_scope_answers_at_in_scopes_and_star_does_not() {
+    let root = in_scopes_corpus("mcp-in-scopes-resolve");
+    let replies = exchange(
+        &root,
+        &[
+            &call("aval_resolve", r#"{"key":"db.engine"}"#),
+            &call("aval_resolve", r#"{"key":"db.engine","scope":"*"}"#),
+        ],
+    );
+    let (bare, _) = tool_result(&replies[0]);
+    assert_eq!(state(bare), "active");
+    assert_eq!(
+        bare.get("scope_source").and_then(|s| s.as_str()),
+        Some("in_scopes")
+    );
+    let (star, is_error) = tool_result(&replies[1]);
+    assert_eq!(state(star), "undecided");
+    assert!(!is_error);
+}
+
+#[test]
+fn aval_relevant_without_scope_keeps_a_key_only_a_declared_scope_decides() {
+    let root = in_scopes_corpus("mcp-in-scopes-relevant");
+    let replies = exchange(
+        &root,
+        &[
+            &call("aval_relevant", r#"{"text":"postgres engine"}"#),
+            &call("aval_relevant", r#"{"text":"postgres engine","scope":"*"}"#),
+        ],
+    );
+    let (bare, _) = tool_result(&replies[0]);
+    assert_eq!(bare.get("scope").and_then(|s| s.as_str()), Some("*"));
+    assert!(bare.get("scopes").is_some(), "{}", bare);
+    let bare_keys = bare.get("keys").and_then(|k| k.as_arr()).expect("keys");
+    assert_eq!(bare_keys.len(), 1, "{}", bare);
+    assert_eq!(state(&bare_keys[0]), "active");
+    assert_eq!(
+        bare_keys[0].get("scope").and_then(|s| s.as_str()),
+        Some("cloud")
+    );
+
+    let (star, _) = tool_result(&replies[1]);
+    let star_keys = star.get("keys").and_then(|k| k.as_arr()).expect("keys");
+    assert!(
+        star_keys.iter().all(|row| state(row) != "active"),
+        "{}",
+        star
+    );
+}

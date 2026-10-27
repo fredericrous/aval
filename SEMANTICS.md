@@ -86,6 +86,10 @@ keys:
 - `traits`, `areas`, `disclaims` — the trait vocabulary, and which parts of
   this repository have which traits (§2.5). Optional. They change what is
   displayed, never what resolves.
+- `in_scopes` — the scopes this repository is in (§5, default query scope).
+  Optional. Every name MUST be in the scope vocabulary in force (own `scopes`
+  plus the vendored packs') and MUST NOT be `*` (`in-scopes-declared`).
+  Consumer-local (§2.5): a pack MUST NOT carry it.
 
 ### 2.1 Per-key scopes
 
@@ -554,6 +558,9 @@ applies: [cli]
 - `areas` and `disclaims` are **consumer-local**. They describe this
   repository's files, which no other repository has, so a pack MUST NOT carry
   them and a pack that does is refused (`pack-parses`).
+- `in_scopes` (§2) is consumer-local for the same reason: which scopes a
+  repository is in is a fact about that repository. It is not applicability:
+  unlike traits, it changes what a query without `--scope` resolves (§5).
 
 #### Applicability
 
@@ -912,6 +919,55 @@ nothing accepted has ever occupied the slot.
 
 `resolve` reports which slot answered, so a caller can tell a scope-specific
 answer from an inherited default.
+
+#### Default query scope
+
+When a repository declares `in_scopes` (§2) and the caller names no scope,
+`resolve_default(key)` runs instead of `resolve(key, *)`. The precedence, stated
+once, highest first: the `--scope` flag (including an explicit `--scope '*'`,
+which behaves exactly as above), then the repository's `in_scopes`, then `*`.
+
+```
+resolve_default(key):
+
+  A ← { s ∈ in_scopes : key.admits(s) ∧ slot(key, s) is occupied }   // own slot only
+
+  |A| = 0   → resolve(key, *)
+  |A| = 1   → the answer of that slot
+  |A| > 1   → contradiction (exit 5)
+```
+
+- **Own-slot rule.** A scope that merely inherits the `*` head, or is
+  undecided, is not in A. A key without a `scopes` restriction admits every
+  scope (§2.1), so this is what keeps a `*` default plus one scoped override
+  from reading as a disagreement: the override answers alone.
+- **Entry identity.** The answering entries are distinct per scope (§1.4), so
+  two declared scopes contradict even when their ADR ids or choice text match.
+  Entries are never deduplicated by ADR id before the verdict.
+- **`by_scope`.** The contradiction carries `by_scope: [{scope, adr}]`, one
+  row per head per answering scope; `heads` is the union of those ADRs and
+  `matched_scope` is null. Text output names each scope and its ADR.
+- **`scope_source`.** JSON answers carry `scope_source`: `flag` when
+  `--scope` was given, `in_scopes` when a declared scope's own slot answered
+  (or several contradicted), `default` when no declared scope answered and the
+  answer came from `*`, or the repository declares no `in_scopes`.
+- **The remedy** for such a contradiction is the repository's `in_scopes`
+  (narrow it) or deciding the key at one scope, never the corpus.
+- `relevant` with no `--scope` keeps a key that `*` or any declared scope
+  admits, resolves each with `resolve_default`, and reports the answering slot
+  as the row's `scope` (the flag's scope under `--scope S`, and null for a
+  cross-scope contradiction, which has no single answering slot); the
+  top-level `scope` stays `*` and `scopes` lists the declared scopes.
+- `history` with no `--scope` prints the `*` chain and one labelled chain per
+  declared scope that admits the key (JSON field `chains`, one history object
+  per scope); it is not authority and exits 0.
+  `--all-repos` applies each repository's own `in_scopes`.
+- `check` reports a warning (`in-scopes-conflict`, in `warnings` under
+  `--json`) for a key more than one declared scope answers. A warning never
+  changes the exit code.
+- `aval traits --summary` names the declared scopes.
+
+Exit codes are those of `resolve` (§14): a default-scope contradiction is 5.
 
 ### 5.1 Relevance is a suggestion
 

@@ -27,6 +27,47 @@ pub struct Answer<'a> {
     pub slot: Slot<'a>,
     pub prov: Vec<(AdrId, Provenance)>,
     pub pack: Option<String>,
+    /// Where the scope came from: the flag, the repository's `in_scopes`, or
+    /// the default scope (SEMANTICS section 5).
+    pub source: ScopeSource,
+}
+
+/// Where the scope of an answer came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeSource {
+    Flag,
+    InScopes,
+    Default,
+}
+
+impl ScopeSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScopeSource::Flag => "flag",
+            ScopeSource::InScopes => "in_scopes",
+            ScopeSource::Default => "default",
+        }
+    }
+}
+
+/// Which source answered a query made with `scope` (`None` = no flag).
+pub fn scope_source(scope: Option<&str>, verdict: &Verdict) -> ScopeSource {
+    if scope.is_some() {
+        return ScopeSource::Flag;
+    }
+    match verdict {
+        Verdict::Contradiction { by_scope, .. } if !by_scope.is_empty() => ScopeSource::InScopes,
+        Verdict::Active { matched_scope, .. } | Verdict::Retired { matched_scope, .. }
+            if matched_scope != DEFAULT_SCOPE =>
+        {
+            ScopeSource::InScopes
+        }
+        Verdict::Active { .. }
+        | Verdict::Retired { .. }
+        | Verdict::Contradiction { .. }
+        | Verdict::Undecided
+        | Verdict::Unknown { .. } => ScopeSource::Default,
+    }
 }
 
 /// Resolve, and enrich the verdict the way both surfaces need it.
@@ -38,10 +79,17 @@ pub fn answer<'a>(
     g: &Graph,
     root: &Path,
     key: &'a str,
-    scope: &'a str,
+    scope: Option<&'a str>,
 ) -> Result<Answer<'a>, Inconsistent> {
-    let verdict = g.resolve(key, scope)?;
-    let slot = Slot { key, scope };
+    let verdict = match scope {
+        Some(named) => g.resolve(key, named)?,
+        None => g.resolve_default(key)?,
+    };
+    let slot = Slot {
+        key,
+        scope: scope.unwrap_or(DEFAULT_SCOPE),
+    };
+    let source = scope_source(scope, &verdict);
 
     // Competing heads are the one verdict where "which commit did this" is
     // load-bearing, because parallel worktrees make them routine. Enrichment
@@ -50,17 +98,17 @@ pub fn answer<'a>(
         Verdict::Contradiction {
             heads,
             matched_scope,
-            ..
+            by_scope,
         } => heads
             .iter()
             .map(|id| {
-                let at = Slot {
-                    key,
-                    scope: matched_scope.as_deref().unwrap_or(DEFAULT_SCOPE),
-                };
-                let found = g
-                    .heads(at)
+                let mut searched: Vec<&str> = by_scope.iter().map(|(at, _)| at.as_str()).collect();
+                if searched.is_empty() {
+                    searched.push(matched_scope.as_deref().unwrap_or(DEFAULT_SCOPE));
+                }
+                let found = searched
                     .into_iter()
+                    .flat_map(|at| g.heads(Slot { key, scope: at }))
                     .find(|(a, _)| &a.id == id)
                     .map(|(a, e)| (a.file.clone(), e.line));
                 match found {
@@ -89,6 +137,7 @@ pub fn answer<'a>(
         slot,
         prov,
         pack,
+        source,
     })
 }
 
@@ -98,7 +147,9 @@ impl Answer<'_> {
     }
 
     pub fn json(&self) -> Json {
-        verdict_json(&self.verdict, self.slot, &self.prov).set_opt("pack", self.pack.clone())
+        verdict_json(&self.verdict, self.slot, &self.prov)
+            .set("scope_source", self.source.as_str())
+            .set_opt("pack", self.pack.clone())
     }
 
     pub fn text(&self) -> String {
@@ -177,19 +228,21 @@ pub fn verdict_json(v: &Verdict, slot: Slot<'_>, prov: &[(AdrId, Provenance)]) -
                     "heads",
                     heads
                         .iter()
-                        .map(|h| {
-                            let p = prov.iter().find(|(id, _)| id == h);
-                            Json::obj().set("adr", h.as_str()).set(
+                        .map(|head| {
+                            let provenance = prov.iter().find(|(id, _)| id == head);
+                            Json::obj().set("adr", head.as_str()).set(
                                 "provenance",
                                 Json::obj()
                                     .set(
                                         "state",
-                                        p.map(|(_, x)| x.token()).unwrap_or("unavailable"),
+                                        provenance
+                                            .map(|(_, state)| state.token())
+                                            .unwrap_or("unavailable"),
                                     )
                                     .set_opt(
                                         "commit",
-                                        p.and_then(|(_, x)| match x {
-                                            Provenance::Committed(s) => Some(s.clone()),
+                                        provenance.and_then(|(_, state)| match state {
+                                            Provenance::Committed(commit) => Some(commit.clone()),
                                             _ => None,
                                         }),
                                     ),
@@ -271,8 +324,13 @@ pub fn verdict_text(v: &Verdict, slot: Slot<'_>, prov: &[(AdrId, Provenance)]) -
         Verdict::Undecided => {
             s.push_str(&format!("undecided   {}\n", v.note(slot)));
         }
-        Verdict::Contradiction { heads, .. } => {
+        Verdict::Contradiction {
+            heads, by_scope, ..
+        } => {
             s.push_str(&format!("contradiction   {}\n", v.note(slot)));
+            for (scope, adr) in by_scope {
+                s.push_str(&format!("  at {}: {}\n", scope, adr));
+            }
             for h in heads {
                 match prov.iter().find(|(id, _)| id == h) {
                     Some((_, Provenance::Committed(sha))) => {
@@ -881,6 +939,54 @@ pub fn show_text(g: &Graph, adr: &Adr) -> String {
     s
 }
 
+/// The declared scopes that admit `key`, in declaration order.
+fn declared_scopes_admitting<'graph>(graph: &'graph Graph, key: &str) -> Vec<&'graph str> {
+    let reg = graph.registry();
+    reg.in_scopes
+        .iter()
+        .filter(|scope| reg.admits(key, scope))
+        .map(String::as_str)
+        .collect()
+}
+
+/// History with no `--scope`: the `*` chain, and one labelled chain per
+/// declared scope that admits the key. Unchanged when `in_scopes` is absent.
+pub fn history_default_json(graph: &Graph, key: &str) -> Json {
+    let star = Slot {
+        key,
+        scope: DEFAULT_SCOPE,
+    };
+    let json = history_json(graph, star, &graph.history(star));
+    let scopes = declared_scopes_admitting(graph, key);
+    if scopes.is_empty() {
+        return json;
+    }
+    json.set(
+        "chains",
+        scopes
+            .into_iter()
+            .map(|scope| {
+                let slot = Slot { key, scope };
+                history_json(graph, slot, &graph.history(slot))
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+pub fn history_default_text(graph: &Graph, key: &str) -> String {
+    let star = Slot {
+        key,
+        scope: DEFAULT_SCOPE,
+    };
+    let mut text = history_text(graph, star, &graph.history(star));
+    for scope in declared_scopes_admitting(graph, key) {
+        let slot = Slot { key, scope };
+        text.push('\n');
+        text.push_str(&history_text(graph, slot, &graph.history(slot)));
+    }
+    text
+}
+
 pub fn history_json(g: &Graph, slot: Slot<'_>, chain: &[&Adr]) -> Json {
     let items: Vec<Json> = chain
         .iter()
@@ -939,7 +1045,7 @@ pub struct Reply {
     pub is_error: bool,
 }
 
-pub fn resolve_in(l: &Loaded, key: &str, scope: &str) -> Reply {
+pub fn resolve_in(l: &Loaded, key: &str, scope: Option<&str>) -> Reply {
     match answer(&l.graph, &l.root, key, scope) {
         Ok(a) => Reply {
             json: a.json(),
@@ -1061,7 +1167,8 @@ pub fn rule_in(l: &Loaded, id: &str) -> Reply {
     }
 }
 
-pub fn history_in(l: &Loaded, key: &str, scope: &str) -> Reply {
+pub fn history_in(l: &Loaded, key: &str, scope: Option<&str>) -> Reply {
+    let shown = scope.unwrap_or(DEFAULT_SCOPE);
     let reg = l.graph.registry();
     let unknown = |what: &str, names: Vec<&str>, needle: &str, line: String| {
         let sug = aval_core::model::suggest(needle, names).map(str::to_string);
@@ -1073,7 +1180,7 @@ pub fn history_in(l: &Loaded, key: &str, scope: &str) -> Reply {
             ));
         }
         Reply {
-            json: history_unknown_json(what, key, scope, sug),
+            json: history_unknown_json(what, key, shown, sug),
             text,
             exit: 7,
             is_error: true,
@@ -1087,6 +1194,14 @@ pub fn history_in(l: &Loaded, key: &str, scope: &str) -> Reply {
             format!("aval: `{}` is not a registered decision key\n", key),
         );
     }
+    let Some(scope) = scope else {
+        return Reply {
+            json: history_default_json(&l.graph, key),
+            text: history_default_text(&l.graph, key),
+            exit: 0,
+            is_error: false,
+        };
+    };
     if !reg.has_scope(scope) {
         return unknown(
             "scope",

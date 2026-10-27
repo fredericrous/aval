@@ -9,7 +9,6 @@
 use aval::load::{LoadError, Loaded};
 use aval_core::graph::{Graph, Verdict};
 use aval_core::json::{self, Json};
-use aval_core::model::DEFAULT_SCOPE;
 use std::path::{Path, PathBuf};
 
 fn conformance_dir() -> PathBuf {
@@ -371,7 +370,7 @@ fn query_of(q: &Json) -> aval::relevant::Query {
             .get("top")
             .and_then(|t| t.as_i64())
             .unwrap_or(aval::relevant::DEFAULT_TOP as i64) as usize,
-        scope: want_str(q, "scope").unwrap_or(DEFAULT_SCOPE).to_string(),
+        scope: want_str(q, "scope").map(str::to_string),
     }
 }
 

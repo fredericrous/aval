@@ -28,7 +28,7 @@ use crate::load;
 use crate::relevant;
 use crate::render;
 use aval_core::json::Json;
-use aval_core::model::{Governs, DEFAULT_SCOPE};
+use aval_core::model::Governs;
 use std::io::{BufRead, Write};
 use std::path::Path;
 
@@ -212,8 +212,8 @@ fn tool(name: &str, description: &str, input: Json) -> Json {
 
 const KEY_ARG: &str = "The exact decision key, e.g. `stack.sql-layer`. Exact \
      only — there is no matching by similarity. Use aval_keys to find one.";
-const SCOPE_ARG: &str = "The scope to ask at, e.g. `homelab`. Omit for the \
-     default scope `*`. An undeclared scope is rejected, never absorbed into \
+const SCOPE_ARG: &str = "The scope to ask at, e.g. `homelab`. Omit to answer at the \
+     repository's `in_scopes` (falling back to `*`); `*` asks the default scope alone. An undeclared scope is rejected, never absorbed into \
      the default.";
 const REPO_ARG: &str = "Which repository, by directory name, when the server \
      was started in a WORKSPACE — a directory with no corpus of its own above \
@@ -308,7 +308,7 @@ fn tools() -> Vec<Json> {
                         prop(
                             "string",
                             "Resolve each ranked key at this scope, and rank only \
-                             the keys answerable there. Omit for the default scope.",
+                             the keys answerable there. Omit to resolve at the repository's `in_scopes`; `*` asks the default scope alone.",
                         ),
                     ),
                     repo.clone(),
@@ -740,12 +740,18 @@ impl Out {
 /// protocol error whether or not there is a corpus to ask, and a caller must
 /// not have to guess which of the two it got.
 enum Ask<'a> {
-    Resolve { key: &'a str, scope: &'a str },
+    Resolve {
+        key: &'a str,
+        scope: Option<&'a str>,
+    },
     Relevant(relevant::Query),
     Keys(render::Detail),
     Heads,
     Show(&'a str),
-    History { key: &'a str, scope: &'a str },
+    History {
+        key: &'a str,
+        scope: Option<&'a str>,
+    },
     Rules(render::Filter),
     Rule(&'a str),
     Traits,
@@ -754,12 +760,12 @@ enum Ask<'a> {
 impl Ask<'_> {
     fn run(&self, l: &load::Loaded) -> render::Reply {
         match self {
-            Ask::Resolve { key, scope } => render::resolve_in(l, key, scope),
+            Ask::Resolve { key, scope } => render::resolve_in(l, key, *scope),
             Ask::Relevant(q) => relevant::relevant_in(l, q),
             Ask::Keys(d) => render::keys_in(l, *d),
             Ask::Heads => render::heads_in(l),
             Ask::Show(id) => render::show_in(l, id),
-            Ask::History { key, scope } => render::history_in(l, key, scope),
+            Ask::History { key, scope } => render::history_in(l, key, *scope),
             Ask::Rules(f) => render::rules_in(l, f),
             Ask::Rule(id) => render::rule_in(l, id),
             Ask::Traits => render::Reply {
@@ -830,7 +836,7 @@ fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
         "aval_resolve" => match req_str(args, "key") {
             Ok(key) => Ask::Resolve {
                 key,
-                scope: opt_str(args, "scope").unwrap_or(DEFAULT_SCOPE),
+                scope: opt_str(args, "scope"),
             },
             Err(e) => return error(id, INVALID_PARAMS, &e),
         },
@@ -921,7 +927,7 @@ fn tools_call(root: &Path, id: Json, msg: &Json) -> Json {
         "aval_history" => match req_str(args, "key") {
             Ok(key) => Ask::History {
                 key,
-                scope: opt_str(args, "scope").unwrap_or(DEFAULT_SCOPE),
+                scope: opt_str(args, "scope"),
             },
             Err(e) => return error(id, INVALID_PARAMS, &e),
         },
@@ -1057,7 +1063,6 @@ fn opt_str<'a>(args: Option<&'a Json>, name: &str) -> Option<&'a str> {
 fn relevant_args(args: Option<&Json>) -> Result<relevant::Query, String> {
     let mut q = relevant::Query {
         top: relevant::DEFAULT_TOP,
-        scope: DEFAULT_SCOPE.to_string(),
         ..relevant::Query::default()
     };
     match args.and_then(|a| a.get("paths")) {
@@ -1094,7 +1099,7 @@ fn relevant_args(args: Option<&Json>) -> Result<relevant::Query, String> {
     }
     match args.and_then(|a| a.get("scope")) {
         None | Some(Json::Null) => {}
-        Some(Json::Str(s)) if !s.is_empty() => q.scope = s.clone(),
+        Some(Json::Str(named)) if !named.is_empty() => q.scope = Some(named.clone()),
         Some(_) => return Err("`scope` must be a non-empty string".into()),
     }
     if q.is_empty() {

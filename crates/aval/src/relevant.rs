@@ -36,7 +36,7 @@ use crate::load::Loaded;
 use crate::render::{self, Reply};
 use aval_core::applicability::{self, Omitted, Scope};
 use aval_core::json::Json;
-use aval_core::model::{Adr, AdrId, Entry, Rule, Slot};
+use aval_core::model::{Adr, AdrId, Entry, Rule, Slot, DEFAULT_SCOPE};
 use aval_core::relevance::{self, Doc, Index};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -120,8 +120,9 @@ pub struct Query {
     pub changed: bool,
     /// How many keys, and how many rules, to report.
     pub top: usize,
-    /// The scope every ranked key is resolved at.
-    pub scope: String,
+    /// The scope every ranked key is resolved at. `None` is no flag, which is
+    /// not the same as `*`: keys resolve at the repository's `in_scopes`.
+    pub scope: Option<String>,
 }
 
 impl Query {
@@ -448,14 +449,14 @@ fn rule_docs(rules: &[&Rule]) -> Vec<Doc> {
 /// prints.
 pub fn relevant_in(l: &Loaded, q: &Query) -> Reply {
     let reg = l.graph.registry();
-    if !reg.has_scope(&q.scope) {
-        let sug = aval_core::model::suggest(&q.scope, reg.scopes.iter().map(String::as_str));
-        let mut text = format!("aval: `{}` is not a declared scope\n", q.scope);
-        if let Some(s) = sug {
-            text.push_str(&format!("  did you mean `{}`?\n", s));
+    if let Some(named) = q.scope.as_deref().filter(|named| !reg.has_scope(named)) {
+        let sug = aval_core::model::suggest(named, reg.scopes.iter().map(String::as_str));
+        let mut text = format!("aval: `{}` is not a declared scope\n", named);
+        if let Some(suggestion) = sug {
+            text.push_str(&format!("  did you mean `{}`?\n", suggestion));
         }
         return Reply {
-            json: render::error_json(2, &format!("`{}` is not a declared scope", q.scope), &[]),
+            json: render::error_json(2, &format!("`{}` is not a declared scope", named), &[]),
             text,
             exit: 2,
             is_error: true,
@@ -522,7 +523,17 @@ pub fn relevant_in(l: &Loaded, q: &Query) -> Reply {
         // answer, it is the wrong axis (SEMANTICS section 2.1). `resolve` says
         // so with exit 7; a ranking says so by not offering it, because the
         // caller asked what governs it *here*.
-        if !reg.admits(&k.name, &q.scope) {
+        let admitted = match q.scope.as_deref() {
+            Some(named) => reg.admits(&k.name, named),
+            None => {
+                reg.admits(&k.name, DEFAULT_SCOPE)
+                    || reg
+                        .in_scopes
+                        .iter()
+                        .any(|declared| reg.admits(&k.name, declared))
+            }
+        };
+        if !admitted {
             continue;
         }
         let mut hit_mention: Vec<String> = Vec::new();
@@ -626,13 +637,20 @@ pub fn relevant_in(l: &Loaded, q: &Query) -> Reply {
 fn verdict_of<'a>(
     l: &'a Loaded,
     key: &'a str,
-    scope: &'a str,
+    scope: Option<&'a str>,
 ) -> Option<(aval_core::graph::Verdict, Slot<'a>)> {
-    let slot = Slot { key, scope };
+    let slot = Slot {
+        key,
+        scope: scope.unwrap_or(DEFAULT_SCOPE),
+    };
     // An inconsistent graph is unreachable past Layer A, and is never turned
     // into a verdict (SEMANTICS section 4). Here it means one key is silently
     // absent from a ranking, which is what a suggestion is allowed to be.
-    l.graph.resolve(key, scope).ok().map(|v| (v, slot))
+    let verdict = match scope {
+        Some(named) => l.graph.resolve(key, named),
+        None => l.graph.resolve_default(key),
+    };
+    verdict.ok().map(|verdict| (verdict, slot))
 }
 
 /// The scopes a key is decided at, other than the one that answered.
@@ -667,12 +685,30 @@ fn render(
     let width = ranked.iter().map(|r| r.key.len()).max().unwrap_or(0);
 
     for r in ranked {
-        let Some((v, slot)) = verdict_of(l, &r.key, &q.scope) else {
+        let Some((verdict, slot)) = verdict_of(l, &r.key, q.scope.as_deref()) else {
             continue;
         };
-        let also = elsewhere(l, &r.key, matched_scope(&v).unwrap_or(&q.scope));
+        let cross_scope = matches!(
+            &verdict,
+            aval_core::graph::Verdict::Contradiction { by_scope, .. } if !by_scope.is_empty()
+        );
+        let answering = matched_scope(&verdict).unwrap_or(slot.scope);
+        // A cross-scope contradiction has no single answering slot, so no
+        // slot is "the" one to measure other decisions against.
+        let also = if cross_scope {
+            Vec::new()
+        } else {
+            elsewhere(l, &r.key, answering)
+        };
+        let row_scope = if cross_scope {
+            Json::Null
+        } else if q.scope.is_some() {
+            Json::from(slot.scope)
+        } else {
+            Json::from(answering)
+        };
         let unresolved = matches!(
-            v,
+            verdict,
             aval_core::graph::Verdict::Undecided | aval_core::graph::Verdict::Contradiction { .. }
         );
 
@@ -695,21 +731,26 @@ fn render(
             );
         }
         rows.push(
-            render::verdict_json(&v, slot, &[])
+            render::verdict_json(&verdict, slot, &[])
+                .set("scope", row_scope)
+                .set(
+                    "scope_source",
+                    render::scope_source(q.scope.as_deref(), &verdict).as_str(),
+                )
                 .set("score", r.score)
                 .set("why", why),
         );
         deps.push(
             Json::obj()
                 .set("key", r.key.as_str())
-                .set("state", v.token())
-                .set("exit", v.exit())
+                .set("state", verdict.token())
+                .set("exit", verdict.exit())
                 .set("unresolved", unresolved)
-                .set_opt("adr", v.adr().map(|a| a.as_str().to_string())),
+                .set_opt("adr", verdict.adr().map(|a| a.as_str().to_string())),
         );
 
         // --- the same row, for a person
-        let lead = match &v {
+        let lead = match &verdict {
             aval_core::graph::Verdict::Active { adr, choice, .. } => {
                 format!("active          {}   {}", adr, choice)
             }
@@ -723,7 +764,7 @@ fn render(
             lead,
             width = width
         ));
-        if let aval_core::graph::Verdict::Contradiction { heads, .. } = &v {
+        if let aval_core::graph::Verdict::Contradiction { heads, .. } = &verdict {
             text.push_str(&format!(
                 "{:width$}  stop; do not pick one: {}\n",
                 "",
@@ -789,11 +830,15 @@ fn render(
         ADVISORY
     ));
 
+    let reg = l.graph.registry();
+    let declared_scopes = (q.scope.is_none() && !reg.in_scopes.is_empty())
+        .then(|| reg.in_scopes.iter().map(String::as_str).collect::<Vec<_>>());
     let json = Json::obj()
         .set("kind", "suggestion")
         .set("advisory", true)
         .set("note", ADVISORY)
-        .set("scope", q.scope.as_str())
+        .set("scope", q.scope.as_deref().unwrap_or(DEFAULT_SCOPE))
+        .set_opt("scopes", declared_scopes)
         .set(
             "query",
             Json::obj()

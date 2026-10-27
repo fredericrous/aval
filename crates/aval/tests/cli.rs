@@ -1071,3 +1071,197 @@ fn relevant_reads_the_working_tree_when_asked() {
     assert_eq!(got.code, 0, "{}{}", got.out, got.err);
     assert!(got.out.contains("storage.object-store"), "{}", got.out);
 }
+
+// --- in_scopes: the repository declares the scopes it is in -----------------
+
+const IN_SCOPES_REGISTRY: &str =
+    "dir: docs/adr\nscopes: [cloud]\nin_scopes: [cloud]\nkeys:\n  db.engine:\n";
+
+const DECIDED_AT_CLOUD: &str = "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  \
+                                - key: db.engine\n    scope: cloud\n    choice: Postgres\n    \
+                                first: true\n---\n# engine\n";
+
+fn in_scopes_corpus(name: &str) -> PathBuf {
+    let root = scratch(name);
+    write(&root, ".adr.yaml", IN_SCOPES_REGISTRY);
+    write(&root, "docs/adr/0001-engine.md", DECIDED_AT_CLOUD);
+    root
+}
+
+#[test]
+fn resolve_with_no_flag_answers_at_in_scopes_and_star_does_not() {
+    let root = in_scopes_corpus("in-scopes-resolve");
+
+    let bare = run(&root, &["resolve", "db.engine", "--json"]);
+    assert_eq!(bare.code, 0, "{}{}", bare.out, bare.err);
+    assert!(bare.out.contains(r#""state":"active""#), "{}", bare.out);
+    assert!(
+        bare.out.contains(r#""matched_scope":"cloud""#),
+        "{}",
+        bare.out
+    );
+    assert!(
+        bare.out.contains(r#""scope_source":"in_scopes""#),
+        "{}",
+        bare.out
+    );
+
+    let star = run(&root, &["resolve", "db.engine", "--scope", "*", "--json"]);
+    assert_eq!(star.code, 4, "{}{}", star.out, star.err);
+    assert!(star.out.contains(r#""state":"undecided""#), "{}", star.out);
+    assert!(
+        star.out.contains(r#""scope_source":"flag""#),
+        "{}",
+        star.out
+    );
+}
+
+#[test]
+fn history_with_no_flag_keeps_the_star_chain_and_adds_each_declared_scope() {
+    let root = in_scopes_corpus("in-scopes-history");
+
+    let bare = run(&root, &["history", "db.engine"]);
+    assert_eq!(bare.code, 0, "{}{}", bare.out, bare.err);
+    assert!(bare.out.contains("history of db.engine"), "{}", bare.out);
+    assert!(bare.out.contains("nothing has decided"), "{}", bare.out);
+    assert!(bare.out.contains("ADR-0001"), "{}", bare.out);
+
+    let json = run(&root, &["history", "db.engine", "--json"]);
+    assert_eq!(json.code, 0, "{}{}", json.out, json.err);
+    assert!(json.out.contains(r#""scope":"*""#), "{}", json.out);
+    assert!(json.out.contains(r#""chains":[{"#), "{}", json.out);
+}
+
+#[test]
+fn resolve_all_repos_uses_each_repositorys_own_in_scopes() {
+    let ws = ws_scratch("in-scopes-all-repos");
+    for name in ["declares", "silent"] {
+        let root = ws.join(name);
+        let registry = if name == "declares" {
+            IN_SCOPES_REGISTRY
+        } else {
+            "dir: docs/adr\nscopes: [cloud]\nkeys:\n  db.engine:\n"
+        };
+        write(&root, ".adr.yaml", registry);
+        write(&root, "docs/adr/0001-engine.md", DECIDED_AT_CLOUD);
+    }
+    let got = run(&ws, &["resolve", "db.engine", "--all-repos", "--json"]);
+    assert!(
+        got.out.contains(r#""declares":{"#) && got.out.contains(r#""scope_source":"in_scopes""#),
+        "{}{}",
+        got.out,
+        got.err
+    );
+    let silent = got.out.split(r#""silent":"#).nth(1).expect("silent member");
+    assert!(silent.contains(r#""state":"undecided""#), "{}", got.out);
+    assert!(
+        silent.contains(r#""scope_source":"default""#),
+        "{}",
+        got.out
+    );
+}
+
+#[test]
+fn check_json_carries_in_scopes_warnings_and_still_exits_zero() {
+    let root = scratch("in-scopes-check");
+    write(
+        &root,
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [one, two]\nin_scopes: [one, two]\nkeys:\n  db.engine:\n",
+    );
+    write(
+        &root,
+        "docs/adr/0001-engine.md",
+        "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  - key: db.engine\n    scope: one\n    \
+         choice: Same\n    first: true\n  - key: db.engine\n    scope: two\n    choice: Same\n    \
+         first: true\n---\n# engine\n",
+    );
+    assert_eq!(run(&root, &["heads", "--write"]).code, 0);
+    let got = run(&root, &["check", "--json"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(got.out.contains(r#""warnings":[{"#), "{}", got.out);
+    assert!(got.out.contains("in-scopes-conflict"), "{}", got.out);
+
+    let resolved = run(&root, &["resolve", "db.engine"]);
+    assert_eq!(resolved.code, 5, "{}{}", resolved.out, resolved.err);
+    assert!(
+        resolved.out.contains("at one: ADR-0001"),
+        "{}",
+        resolved.out
+    );
+    assert!(
+        resolved.out.contains("at two: ADR-0001"),
+        "{}",
+        resolved.out
+    );
+}
+
+#[test]
+fn relevant_reports_a_cross_scope_contradiction_with_a_null_scope() {
+    let root = scratch("in-scopes-relevant-contradiction");
+    write(
+        &root,
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [one, two]\nin_scopes: [one, two]\nkeys:\n  db.engine:\n",
+    );
+    write(
+        &root,
+        "docs/adr/0001-engine.md",
+        "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  - key: db.engine\n    scope: one\n    \
+         choice: Same\n    first: true\n  - key: db.engine\n    scope: two\n    choice: Same\n    \
+         first: true\n---\n# engine\n",
+    );
+    assert_eq!(run(&root, &["heads", "--write"]).code, 0);
+    let got = run(&root, &["relevant", "--text", "db engine", "--json"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    assert!(
+        got.out.contains(r#""state":"contradiction""#),
+        "{}",
+        got.out
+    );
+    assert!(got.out.contains(r#""scope":null"#), "{}", got.out);
+    assert!(
+        got.out.contains(r#""scope_source":"in_scopes""#),
+        "{}",
+        got.out
+    );
+    assert!(!got.out.contains("decided_elsewhere"), "{}", got.out);
+}
+
+#[test]
+fn relevant_with_a_scope_flag_names_the_flag_scope_over_a_star_decision() {
+    let root = scratch("relevant-scope-flag");
+    write(
+        &root,
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [cloud]\nkeys:\n  db.engine:\n",
+    );
+    write(
+        &root,
+        "docs/adr/0001-engine.md",
+        "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  - key: db.engine\n    choice: Postgres\n    \
+         first: true\n---\n# engine\n",
+    );
+    assert_eq!(run(&root, &["heads", "--write"]).code, 0);
+    let got = run(
+        &root,
+        &[
+            "relevant",
+            "--text",
+            "db engine",
+            "--scope",
+            "cloud",
+            "--json",
+        ],
+    );
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    let parsed = aval_core::json::parse(&got.out).expect("json");
+    let rows = parsed
+        .get("keys")
+        .and_then(|keys| keys.as_arr())
+        .expect("keys");
+    let row_scope = rows[0].get("scope").and_then(|scope| scope.as_str());
+    assert_eq!(row_scope, Some("cloud"), "{}", got.out);
+    assert!(got.out.contains(r#""matched_scope":"*""#), "{}", got.out);
+    assert!(got.out.contains(r#""scope_source":"flag""#), "{}", got.out);
+}

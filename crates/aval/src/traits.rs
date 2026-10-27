@@ -573,21 +573,35 @@ fn summary_omitted(l: &Loaded) -> Option<aval_core::applicability::Omitted> {
     applicability::filter(reg, &Scope::for_query(reg, &[]), active).1
 }
 
-/// The hook's line. `None` when no areas are declared, because then nothing is
-/// filtered; otherwise always a line, zeros included, so an area that hides
-/// everything is seen at every session start.
+/// The hook's line. `None` when no areas and no `in_scopes` are declared;
+/// with areas, always a line, zeros included, so an area that hides everything
+/// is seen at every session start. With `in_scopes`, the line also names the
+/// scopes aval answers at by default.
 pub fn summary(l: &Loaded) -> Option<String> {
-    let o = summary_omitted(l)?;
-    Some(format!(
-        "traits here: {} — hidden by traits: {} constraint(s), {} heuristic(s) (aval rules --all-traits)",
-        if o.traits.is_empty() {
-            "none".to_string()
-        } else {
-            o.traits.join(", ")
-        },
-        o.constraints,
-        o.heuristics
-    ))
+    let in_scopes = &l.graph.registry().in_scopes;
+    let scopes_line = (!in_scopes.is_empty()).then(|| {
+        format!(
+            "scopes here: {} (aval resolve answers at them)",
+            in_scopes.join(", ")
+        )
+    });
+    let traits_line = summary_omitted(l).map(|omitted| {
+        format!(
+            "traits here: {} — hidden by traits: {} constraint(s), {} heuristic(s) (aval rules --all-traits)",
+            if omitted.traits.is_empty() {
+                "none".to_string()
+            } else {
+                omitted.traits.join(", ")
+            },
+            omitted.constraints,
+            omitted.heuristics
+        )
+    });
+    match (traits_line, scopes_line) {
+        (Some(traits), Some(scopes)) => Some(format!("{traits}\n{scopes}")),
+        (Some(line), None) | (None, Some(line)) => Some(line),
+        (None, None) => None,
+    }
 }
 
 #[cfg(test)]
