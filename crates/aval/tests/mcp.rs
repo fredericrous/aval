@@ -1902,7 +1902,7 @@ fn the_tool_description_says_it_resolves_nothing() {
     assert!(d.contains("aval_resolve"), "{}", d);
 }
 
-// --- in_scopes: no scope argument is not `*` --------------------------------
+// in_scopes: no scope argument is not `*`
 
 fn in_scopes_corpus(name: &str) -> PathBuf {
     let root = scratch(name);

@@ -57,6 +57,10 @@ pub fn scope_source(scope: Option<&str>, verdict: &Verdict) -> ScopeSource {
     }
     match verdict {
         Verdict::Contradiction { by_scope, .. } if !by_scope.is_empty() => ScopeSource::InScopes,
+        Verdict::Contradiction {
+            matched_scope: Some(matched_scope),
+            ..
+        } if matched_scope != DEFAULT_SCOPE => ScopeSource::InScopes,
         Verdict::Active { matched_scope, .. } | Verdict::Retired { matched_scope, .. }
             if matched_scope != DEFAULT_SCOPE =>
         {
@@ -243,7 +247,9 @@ pub fn verdict_json(v: &Verdict, slot: Slot<'_>, prov: &[(AdrId, Provenance)]) -
                                         "commit",
                                         provenance.and_then(|(_, state)| match state {
                                             Provenance::Committed(commit) => Some(commit.clone()),
-                                            _ => None,
+                                            Provenance::Uncommitted | Provenance::Unavailable => {
+                                                None
+                                            }
                                         }),
                                     ),
                             )
@@ -1045,8 +1051,8 @@ pub struct Reply {
     pub is_error: bool,
 }
 
-pub fn resolve_in(l: &Loaded, key: &str, scope: Option<&str>) -> Reply {
-    match answer(&l.graph, &l.root, key, scope) {
+pub fn resolve_in(loaded: &Loaded, key: &str, scope: Option<&str>) -> Reply {
+    match answer(&loaded.graph, &loaded.root, key, scope) {
         Ok(a) => Reply {
             json: a.json(),
             text: a.text(),
@@ -1167,9 +1173,9 @@ pub fn rule_in(l: &Loaded, id: &str) -> Reply {
     }
 }
 
-pub fn history_in(l: &Loaded, key: &str, scope: Option<&str>) -> Reply {
+pub fn history_in(loaded: &Loaded, key: &str, scope: Option<&str>) -> Reply {
     let shown = scope.unwrap_or(DEFAULT_SCOPE);
-    let reg = l.graph.registry();
+    let registry = loaded.graph.registry();
     let unknown = |what: &str, names: Vec<&str>, needle: &str, line: String| {
         let sug = aval_core::model::suggest(needle, names).map(str::to_string);
         let mut text = line;
@@ -1186,35 +1192,35 @@ pub fn history_in(l: &Loaded, key: &str, scope: Option<&str>) -> Reply {
             is_error: true,
         }
     };
-    if !reg.has_key(key) {
+    if !registry.has_key(key) {
         return unknown(
             "key",
-            reg.keys.iter().map(|k| k.name.as_str()).collect(),
+            registry.keys.iter().map(|k| k.name.as_str()).collect(),
             key,
             format!("aval: `{}` is not a registered decision key\n", key),
         );
     }
     let Some(scope) = scope else {
         return Reply {
-            json: history_default_json(&l.graph, key),
-            text: history_default_text(&l.graph, key),
+            json: history_default_json(&loaded.graph, key),
+            text: history_default_text(&loaded.graph, key),
             exit: 0,
             is_error: false,
         };
     };
-    if !reg.has_scope(scope) {
+    if !registry.has_scope(scope) {
         return unknown(
             "scope",
-            reg.scopes.iter().map(|s| s.as_str()).collect(),
+            registry.scopes.iter().map(|s| s.as_str()).collect(),
             scope,
             format!("aval: `{}` is not a declared scope\n", scope),
         );
     }
     let slot = Slot { key, scope };
-    let chain = l.graph.history(slot);
+    let chain = loaded.graph.history(slot);
     Reply {
-        json: history_json(&l.graph, slot, &chain),
-        text: history_text(&l.graph, slot, &chain),
+        json: history_json(&loaded.graph, slot, &chain),
+        text: history_text(&loaded.graph, slot, &chain),
         exit: 0,
         is_error: false,
     }

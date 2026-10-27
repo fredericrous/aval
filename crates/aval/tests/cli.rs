@@ -1072,7 +1072,7 @@ fn relevant_reads_the_working_tree_when_asked() {
     assert!(got.out.contains("storage.object-store"), "{}", got.out);
 }
 
-// --- in_scopes: the repository declares the scopes it is in -----------------
+// in_scopes: the repository declares the scopes it is in
 
 const IN_SCOPES_REGISTRY: &str =
     "dir: docs/adr\nscopes: [cloud]\nin_scopes: [cloud]\nkeys:\n  db.engine:\n";
@@ -1226,6 +1226,40 @@ fn relevant_reports_a_cross_scope_contradiction_with_a_null_scope() {
         got.out
     );
     assert!(!got.out.contains("decided_elsewhere"), "{}", got.out);
+}
+
+#[test]
+fn a_declared_scopes_own_contradiction_is_sourced_from_in_scopes() {
+    let root = scratch("in-scopes-own-slot-contradiction");
+    write(
+        &root,
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [one]\nin_scopes: [one]\nkeys:\n  db.engine:\n",
+    );
+    write(
+        &root,
+        "docs/adr/0001-postgres.md",
+        "---\nid: ADR-0001\nstatus: accepted\ndecisions:\n  - key: db.engine\n    scope: one\n    \
+         choice: Postgres\n    first: true\n---\n# postgres\n",
+    );
+    write(
+        &root,
+        "docs/adr/0002-sqlite.md",
+        "---\nid: ADR-0002\nstatus: accepted\ndecisions:\n  - key: db.engine\n    scope: one\n    \
+         choice: SQLite\n    first: true\n---\n# sqlite\n",
+    );
+    let got = run(&root, &["resolve", "db.engine", "--json"]);
+    assert_eq!(got.code, 5, "{}{}", got.out, got.err);
+    assert!(
+        got.out.contains(r#""state":"contradiction""#),
+        "{}",
+        got.out
+    );
+    assert!(
+        got.out.contains(r#""scope_source":"in_scopes""#),
+        "{}",
+        got.out
+    );
 }
 
 #[test]

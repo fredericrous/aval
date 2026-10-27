@@ -196,7 +196,7 @@ impl Graph {
         let mut f = Vec::new();
         check_ids_unique(&corpus, &mut f);
         check_vocabulary(&corpus, &mut f);
-        check_in_scopes(&corpus, &mut f);
+        f.extend(in_scopes_findings(&corpus));
         check_edges(&corpus, &mut f);
         check_retirements(&corpus, &mut f);
         check_cycles(&corpus, &mut f);
@@ -533,21 +533,25 @@ fn check_ids_unique(c: &Corpus, out: &mut Vec<Finding>) {
     }
 }
 
-fn check_in_scopes(c: &Corpus, out: &mut Vec<Finding>) {
-    for scope in &c.registry.in_scopes {
-        if !c.registry.has_scope(scope) {
-            let hint = suggest(scope, c.registry.scopes.iter().map(|known| known.as_str()))
+fn in_scopes_findings(corpus: &Corpus) -> Vec<Finding> {
+    let registry = &corpus.registry;
+    registry
+        .in_scopes
+        .iter()
+        .filter(|scope| !registry.has_scope(scope))
+        .map(|scope| {
+            let hint = suggest(scope, registry.scopes.iter().map(|known| known.as_str()))
                 .map(|near| format!("; did you mean `{}`", near))
                 .unwrap_or_default();
-            out.push(a(
+            a(
                 "in-scopes-declared",
                 format!(
                     "`in_scopes` names `{}`, which is not in the registry{}",
                     scope, hint
                 ),
-            ));
-        }
-    }
+            )
+        })
+        .collect()
 }
 
 fn check_vocabulary(c: &Corpus, out: &mut Vec<Finding>) {
