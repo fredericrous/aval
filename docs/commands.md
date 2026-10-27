@@ -7,11 +7,11 @@ to say what each one is for.
 
 | | |
 |---|---|
-| `aval resolve <key> [--scope S]` | the authoritative lookup: what is decided, and nothing else |
+| `aval resolve <key> [--scope S]` | the authoritative lookup: what is decided, and nothing else. With no `--scope`, it answers at the repository's `in_scopes` when `.adr.yaml` declares them (flag, then `in_scopes`, then `*`); JSON carries `scope_source` |
 | `aval relevant [--path P]… [--text W] [--changed] [--top N] [--scope S]` | which keys bear on what you are about to touch, ranked, each with its verdict. Advisory: it resolves nothing. See [which decisions bear on this change](relevance.md) |
 | `aval keys [--names]` | the vocabulary: every key, where it is answerable, where it is decided; `--names` leaves out where it is decided |
 | `aval show <ADR-NNNN>` | derived status of one record, including partial supersession |
-| `aval history <key> [--scope S]` | the chain, labelled as history rather than authority |
+| `aval history <key> [--scope S]` | the chain, labelled as history rather than authority. With no `--scope`, the `*` chain plus one labelled chain per `in_scopes` scope |
 | `aval heads [--write\|--check]` | the projection; `--write` regenerates `HEADS.md`, `--check` says whether it is stale |
 | `aval rules [--level L] [--adopted-by R] [--all] [--all-traits] [--governs code] [--full]` | the rules the decisions have adopted, one line each; `--governs code` keeps rules whose file declares `governs: code`, `--full` prints each rule's text (not with `--index`). See [rules and traits](rules-and-traits.md) |
 | `aval rule <id>` | one rule, with its translation and why |

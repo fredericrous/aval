@@ -97,6 +97,32 @@ fn scope_declared() {
 }
 
 #[test]
+fn in_scopes_declared() {
+    let registry = parse::registry(
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [homelab]\nin_scopes: [homelab, nowhere]\nkeys:\n  a.b:\n",
+    )
+    .expect("registry parses");
+    let findings = Graph::build(Corpus::new(registry, Vec::new())).expect_err("undeclared scope");
+    let finding = findings
+        .iter()
+        .find(|finding| finding.check == "in-scopes-declared")
+        .expect("in-scopes-declared");
+    assert!(finding.message.contains("nowhere"), "{}", finding.message);
+    assert_eq!(findings.len(), 1);
+}
+
+#[test]
+fn in_scopes_refuses_the_default_scope() {
+    let errors = parse::registry(
+        ".adr.yaml",
+        "dir: docs/adr\nscopes: [homelab]\nin_scopes: ['*']\nkeys:\n  a.b:\n",
+    )
+    .expect_err("`*` is always in force");
+    assert!(errors[0].message.contains("in_scopes"));
+}
+
+#[test]
 fn edge_resolves_when_the_target_does_not_exist() {
     rejects(
         &[(

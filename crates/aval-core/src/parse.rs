@@ -29,6 +29,7 @@ const REGISTRY_FIELDS: &[&str] = &[
     "traits",
     "areas",
     "disclaims",
+    "in_scopes",
 ];
 const KEYDEF_FIELDS: &[&str] = &["description", "scopes"];
 
@@ -692,6 +693,19 @@ pub fn registry(file: &str, src: &str) -> Result<Registry, Vec<Finding>> {
         }
     }
 
+    let in_scopes = want_str_list(&doc, "in_scopes", file, &mut out);
+    for scope in &in_scopes {
+        if scope == DEFAULT_SCOPE {
+            out.push(
+                a(
+                    "frontmatter-parses",
+                    "`*` is always in force and must not be listed in `in_scopes`",
+                )
+                .at(file, doc.get("in_scopes").map_or(1, |node| node.line)),
+            );
+        }
+    }
+
     let mut keys = Vec::new();
     match doc.get("keys") {
         None => out.push(a("frontmatter-parses", "missing `keys`").in_file(file)),
@@ -751,6 +765,7 @@ pub fn registry(file: &str, src: &str) -> Result<Registry, Vec<Finding>> {
         reg.keys = keys;
         reg.traits = traits;
         reg.areas = areas;
+        reg.in_scopes = in_scopes;
         reg.disclaims = disclaims;
         Ok(reg)
     } else {

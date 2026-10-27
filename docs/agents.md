@@ -80,6 +80,12 @@ Ten read-only tools: `aval_resolve`, `aval_relevant`, `aval_keys`,
 does and return the same bytes `--json` would, so the two surfaces cannot drift
 apart.
 
+With no `scope` argument, `aval_resolve`, `aval_relevant` and `aval_history`
+answer at the scopes the repository declares in `in_scopes` in `.adr.yaml`
+(an explicit `"*"` asks the default scope alone), and JSON answers carry
+`scope_source`: `flag`, `in_scopes` or `default`. The session hook's traits line
+also names the declared scopes.
+
 `aval_relevant` is the one whose result is **not** an answer, and its
 description says so where a model will read it: the ranking is advisory, what
 is authoritative is the verdict beside each key, and an `undecided` row is the

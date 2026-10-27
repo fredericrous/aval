@@ -9,7 +9,6 @@
 use aval::load::{LoadError, Loaded};
 use aval_core::graph::{Graph, Verdict};
 use aval_core::json::{self, Json};
-use aval_core::model::DEFAULT_SCOPE;
 use std::path::{Path, PathBuf};
 
 fn conformance_dir() -> PathBuf {
@@ -50,23 +49,26 @@ fn want_str<'a>(exp: &'a Json, k: &str) -> Option<&'a str> {
 
 fn run_resolve(case_name: &str, g: &Graph, q: &Json, exp: &Json) {
     let key = want_str(q, "key").expect("query.key");
-    let scope = want_str(q, "scope").unwrap_or(DEFAULT_SCOPE);
-    let v = g.resolve(key, scope).expect("the fixture corpus resolves");
+    let verdict = match want_str(q, "scope") {
+        Some(scope) => g.resolve(key, scope),
+        None => g.resolve_default(key),
+    }
+    .expect("the fixture corpus resolves");
 
     if let Some(want) = want_str(exp, "verdict") {
-        assert_eq!(v.token(), want, "{}: verdict", case_name);
+        assert_eq!(verdict.token(), want, "{}: verdict", case_name);
     }
     if let Some(want) = exp.get("exit").and_then(|x| x.as_i64()) {
-        assert_eq!(v.exit() as i64, want, "{}: exit code", case_name);
+        assert_eq!(verdict.exit() as i64, want, "{}: exit code", case_name);
     }
     // `"adr": null` is an assertion in its own right: exit 7 must carry no ADR,
     // or a caller could act on a suggestion.
     if let Some(node) = exp.get("adr") {
         if node.is_null() {
-            assert_eq!(v.adr(), None, "{}: expected no adr", case_name);
+            assert_eq!(verdict.adr(), None, "{}: expected no adr", case_name);
         } else {
             assert_eq!(
-                v.adr().map(|a| a.as_str()),
+                verdict.adr().map(|a| a.as_str()),
                 node.as_str(),
                 "{}: adr",
                 case_name
@@ -74,7 +76,7 @@ fn run_resolve(case_name: &str, g: &Graph, q: &Json, exp: &Json) {
         }
     }
     if let Some(want) = want_str(exp, "matched_scope") {
-        let got = match &v {
+        let got = match &verdict {
             Verdict::Active { matched_scope, .. } | Verdict::Retired { matched_scope, .. } => {
                 Some(matched_scope.as_str())
             }
@@ -83,7 +85,7 @@ fn run_resolve(case_name: &str, g: &Graph, q: &Json, exp: &Json) {
         assert_eq!(got, Some(want), "{}: matched_scope", case_name);
     }
     if let Some(want) = want_str(exp, "unknown") {
-        match &v {
+        match &verdict {
             Verdict::Unknown { what, .. } => {
                 assert_eq!(what.as_str(), want, "{}: unknown kind", case_name)
             }
@@ -91,7 +93,7 @@ fn run_resolve(case_name: &str, g: &Graph, q: &Json, exp: &Json) {
         }
     }
     if let Some(want) = want_str(exp, "suggestion") {
-        match &v {
+        match &verdict {
             Verdict::Unknown { suggestion, .. } => assert_eq!(
                 suggestion.as_deref(),
                 Some(want),
@@ -101,8 +103,29 @@ fn run_resolve(case_name: &str, g: &Graph, q: &Json, exp: &Json) {
             other => panic!("{}: expected unknown, got {:?}", case_name, other),
         }
     }
+    if let Some(want) = exp.get("by_scope").and_then(|value| value.as_arr()) {
+        match &verdict {
+            Verdict::Contradiction { by_scope, .. } => {
+                let want: Vec<(&str, &str)> = want
+                    .iter()
+                    .map(|row| {
+                        (
+                            want_str(row, "scope").expect("by_scope.scope"),
+                            want_str(row, "adr").expect("by_scope.adr"),
+                        )
+                    })
+                    .collect();
+                let got: Vec<(&str, &str)> = by_scope
+                    .iter()
+                    .map(|(scope, adr)| (scope.as_str(), adr.as_str()))
+                    .collect();
+                assert_eq!(got, want, "{}: by_scope", case_name);
+            }
+            other => panic!("{}: expected contradiction, got {:?}", case_name, other),
+        }
+    }
     if let Some(want) = exp.get("heads").and_then(|x| x.as_arr()) {
-        match &v {
+        match &verdict {
             Verdict::Contradiction { heads, .. } => {
                 let want: Vec<&str> = want.iter().filter_map(|x| x.as_str()).collect();
                 assert_eq!(heads.as_slice(), want.as_slice(), "{}: heads", case_name);
@@ -347,7 +370,7 @@ fn query_of(q: &Json) -> aval::relevant::Query {
             .get("top")
             .and_then(|t| t.as_i64())
             .unwrap_or(aval::relevant::DEFAULT_TOP as i64) as usize,
-        scope: want_str(q, "scope").unwrap_or(DEFAULT_SCOPE).to_string(),
+        scope: want_str(q, "scope").map(str::to_string),
     }
 }
 

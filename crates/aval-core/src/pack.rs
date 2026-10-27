@@ -376,13 +376,13 @@ pub fn parse(file: &str, name: &str, src: &str) -> Result<Pack, Vec<Finding>> {
         .in_file(file)]);
     }
     for (k, v) in doc.as_map().unwrap() {
-        if k == "areas" || k == "disclaims" {
+        if k == "areas" || k == "disclaims" || k == "in_scopes" {
             out.push(
                 a(
                     "pack-parses",
                     format!(
-                        "a pack carries no `{}`: it describes the producer's files, \
-                         which no consumer has (SEMANTICS section 2.5)",
+                        "a pack carries no `{}`: it is local to the repository that \
+                         declares it, and no consumer shares it (SEMANTICS section 2.5)",
                         k
                     ),
                 )
@@ -778,6 +778,7 @@ mod tests {
                 pack_traits: Vec::new(),
                 pack_scopes: Vec::new(),
                 areas: Vec::new(),
+                in_scopes: Vec::new(),
                 disclaims: Vec::new(),
             },
             rules: Vec::new(),

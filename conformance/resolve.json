@@ -15,12 +15,12 @@
     "asserted here: they are fixed in Phase 2 alongside the renderer, and inventing",
     "them before the renderer exists would pin wording nothing has reviewed."
   ],
-  "min_cases": 33,
+  "min_cases": 44,
   "cases": [
     {
       "name": "global_key_resolves_at_default_scope",
       "corpus": "homelab-sample",
-      "query": { "command": "resolve", "key": "gitops.reconciler" },
+      "query": { "command": "resolve", "key": "gitops.reconciler", "scope": "*" },
       "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0001", "matched_scope": "*" }
     },
     {
@@ -44,7 +44,7 @@
     {
       "name": "scoped_only_key_is_undecided_at_the_default_scope",
       "corpus": "homelab-sample",
-      "query": { "command": "resolve", "key": "gitops.registry-mirror" },
+      "query": { "command": "resolve", "key": "gitops.registry-mirror", "scope": "*" },
       "expected": { "verdict": "undecided", "exit": 4 },
       "why": "Fallback runs from a named scope to the default, never the reverse. Four clusters each decided this key; none decided it globally."
     },
@@ -90,7 +90,7 @@
     {
       "name": "retirement_is_its_own_verdict",
       "corpus": "homelab-sample",
-      "query": { "command": "resolve", "key": "dns.dynamic-record-updater" },
+      "query": { "command": "resolve", "key": "dns.dynamic-record-updater", "scope": "*" },
       "expected": { "verdict": "retired", "exit": 6, "adr": "ADR-0015", "matched_scope": "*" }
     },
     {
@@ -115,7 +115,7 @@
     {
       "name": "an_unregistered_key_is_rejected_with_a_suggestion",
       "corpus": "homelab-sample",
-      "query": { "command": "resolve", "key": "storage.objectstore" },
+      "query": { "command": "resolve", "key": "storage.objectstore", "scope": "*" },
       "expected": { "verdict": "unknown", "exit": 7, "unknown": "key", "suggestion": "storage.object-store" }
     },
     {
@@ -128,7 +128,7 @@
     {
       "name": "a_suggestion_is_advisory_and_never_resolves",
       "corpus": "homelab-sample",
-      "query": { "command": "resolve", "key": "storage.objectstore" },
+      "query": { "command": "resolve", "key": "storage.objectstore", "scope": "*" },
       "expected": { "verdict": "unknown", "exit": 7, "adr": null },
       "why": "Exit 7 must carry no ADR. A caller that acted on the suggestion would be guessing."
     },
@@ -158,20 +158,20 @@
     {
       "name": "a_reconciliation_absorbs_both_branches",
       "corpus": "diamond",
-      "query": { "command": "resolve", "key": "api.gateway" },
+      "query": { "command": "resolve", "key": "api.gateway", "scope": "*" },
       "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0004", "matched_scope": "*" }
     },
     {
       "name": "competing_heads_are_a_verdict_not_a_broken_repository",
       "corpus": "contradiction",
-      "query": { "command": "resolve", "key": "api.gateway" },
+      "query": { "command": "resolve", "key": "api.gateway", "scope": "*" },
       "expected": { "verdict": "contradiction", "exit": 5, "heads": ["ADR-0002", "ADR-0003"] },
       "why": "Exit 5, not exit 3. The graph is well formed; the corpus disagrees with itself. This case is what proves exit 5 is reachable rather than masked by validation."
     },
     {
       "name": "a_global_mesh_decision_answers_the_default_scope",
       "corpus": "retire-scoped",
-      "query": { "command": "resolve", "key": "mesh.data-plane" },
+      "query": { "command": "resolve", "key": "mesh.data-plane", "scope": "*" },
       "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0001", "matched_scope": "*" }
     },
     {
@@ -218,14 +218,14 @@
     {
       "name": "a_specification_carries_its_own_decision",
       "corpus": "spec-sources",
-      "query": { "command": "resolve", "key": "model.change-proposal-shape" },
+      "query": { "command": "resolve", "key": "model.change-proposal-shape", "scope": "*" },
       "expected": { "verdict": "active", "exit": 0, "adr": "spec-change-proposals", "matched_scope": "*" },
       "why": "Named in `sources`, keeping its own filename, so the code that cites it by path still resolves."
     },
     {
       "name": "a_numbered_record_and_a_specification_share_one_graph",
       "corpus": "spec-sources",
-      "query": { "command": "resolve", "key": "dsl.serialization" },
+      "query": { "command": "resolve", "key": "dsl.serialization", "scope": "*" },
       "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0001", "matched_scope": "*" },
       "why": "The `dir` rule and the `sources` rule resolve into the same corpus; a repository need not pick one shape."
     },
@@ -239,9 +239,79 @@
     {
       "name": "the_overridden_default_still_stands",
       "corpus": "spec-sources",
-      "query": { "command": "resolve", "key": "ia.mobile-write-policy" },
+      "query": { "command": "resolve", "key": "ia.mobile-write-policy", "scope": "*" },
       "expected": { "verdict": "active", "exit": 0, "adr": "plan-ia-coherence", "matched_scope": "*" },
       "why": "`overrides` records a divergence without moving the default's head. Note the key declares only `storm-board`, so asking it at a tenancy scope is exit 7 rather than this answer."
+    },
+    {
+      "name": "in_scopes_declared_scope_answers",
+      "corpus": "in-scopes",
+      "query": { "command": "resolve", "key": "stack.sql-layer" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0001", "matched_scope": "effect-stack" },
+      "why": "A decision at one declared scope only answers; duro-stack is skipped because the key does not admit it."
+    },
+    {
+      "name": "in_scopes_skips_a_scope_the_key_does_not_admit",
+      "corpus": "in-scopes",
+      "query": { "command": "resolve", "key": "ui.design-system" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0002", "matched_scope": "duro-stack" },
+      "why": "effect-stack is declared but the key is restricted to duro-stack, so it does not count."
+    },
+    {
+      "name": "in_scopes_falls_back_to_the_default_scope",
+      "corpus": "in-scopes",
+      "query": { "command": "resolve", "key": "release.trigger" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0003", "matched_scope": "*" },
+      "why": "No declared scope holds an entry in its own slot, so the answer is the default scope's."
+    },
+    {
+      "name": "in_scopes_no_declared_scope_admits_the_key",
+      "corpus": "in-scopes",
+      "query": { "command": "resolve", "key": "cloud.region" },
+      "expected": { "verdict": "undecided", "exit": 4 },
+      "why": "The key admits only an undeclared scope and nothing is decided at the default scope."
+    },
+    {
+      "name": "in_scopes_default_plus_one_scoped_override_is_the_override",
+      "corpus": "in-scopes",
+      "query": { "command": "resolve", "key": "tooling.formatter" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0005", "matched_scope": "effect-stack" },
+      "why": "duro-stack only inherits the default head, so it does not count as a second answer."
+    },
+    {
+      "name": "in_scopes_identical_choice_text_at_two_scopes_contradicts",
+      "corpus": "in-scopes",
+      "query": { "command": "resolve", "key": "tooling.linter" },
+      "expected": { "verdict": "contradiction", "exit": 5, "heads": ["ADR-0006", "ADR-0007"], "by_scope": [{"scope": "effect-stack", "adr": "ADR-0006"}, {"scope": "duro-stack", "adr": "ADR-0007"}] },
+      "why": "Entry identity includes the scope, so equal choice text is still two answers."
+    },
+    {
+      "name": "in_scopes_one_record_deciding_two_scopes_contradicts_with_one_head",
+      "corpus": "in-scopes",
+      "query": { "command": "resolve", "key": "test.runner" },
+      "expected": { "verdict": "contradiction", "exit": 5, "heads": ["ADR-0008"], "by_scope": [{"scope": "effect-stack", "adr": "ADR-0008"}, {"scope": "duro-stack", "adr": "ADR-0008"}] },
+      "why": "Both scoped entries are kept in by_scope although heads holds one record."
+    },
+    {
+      "name": "in_scopes_two_records_disagreeing_contradict",
+      "corpus": "in-scopes",
+      "query": { "command": "resolve", "key": "build.tool" },
+      "expected": { "verdict": "contradiction", "exit": 5, "heads": ["ADR-0009", "ADR-0010"], "by_scope": [{"scope": "effect-stack", "adr": "ADR-0009"}, {"scope": "duro-stack", "adr": "ADR-0010"}] },
+      "why": "Two declared scopes decide one key differently."
+    },
+    {
+      "name": "in_scopes_explicit_default_scope_is_unchanged",
+      "corpus": "in-scopes",
+      "query": { "command": "resolve", "key": "tooling.linter", "scope": "*" },
+      "expected": { "verdict": "undecided", "exit": 4 },
+      "why": "An explicit scope behaves as before, whatever in_scopes says."
+    },
+    {
+      "name": "absent_in_scopes_resolves_at_the_default_scope",
+      "corpus": "homelab-sample",
+      "query": { "command": "resolve", "key": "gitops.reconciler" },
+      "expected": { "verdict": "active", "exit": 0, "adr": "ADR-0001", "matched_scope": "*" },
+      "why": "A corpus without in_scopes answers a scopeless query exactly as the default scope."
     }
   ]
 }

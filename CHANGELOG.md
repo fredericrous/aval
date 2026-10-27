@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`in_scopes`: a repository declares the scopes it is in.** With no
+  `--scope`, `resolve`, `relevant` and `history` (and the `aval_resolve`,
+  `aval_relevant` and `aval_history` tools) answer at those scopes; the
+  precedence is the flag, then `in_scopes`, then `*`. JSON answers carry
+  `scope_source`. Two declared scopes that both answer one key contradict
+  (exit 5, with `by_scope`); `check --json` carries the same condition as a
+  `warnings` array and still exits 0. `aval traits --summary` names the
+  declared scopes. `--scope '*'` is unchanged.
+
 ## v1.10.0
 
 ### Added

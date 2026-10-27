@@ -431,6 +431,9 @@ pub struct Registry {
     /// Which parts of this repository have which traits. Consumer-local:
     /// never written to, or read from, a pack.
     pub areas: Vec<Area>,
+    /// Scopes this repository is in; `resolve_default` answers at them.
+    /// Consumer-local: never written to, or read from, a pack.
+    pub in_scopes: Vec<String>,
     /// Traits a reviewer says do not hold where detection reports them. Read
     /// only by `aval traits --check`, never by rule selection.
     pub disclaims: Vec<Area>,
@@ -474,6 +477,7 @@ impl Registry {
             pack_traits: Vec::new(),
             pack_scopes: Vec::new(),
             areas: Vec::new(),
+            in_scopes: Vec::new(),
             disclaims: Vec::new(),
         }
     }

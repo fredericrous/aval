@@ -445,21 +445,15 @@ fn cmd_resolve(args: &Args) -> i32 {
         Err(c) => return c,
     };
     if args.all_repos {
-        let scope = args
-            .scope
-            .clone()
-            .unwrap_or_else(|| DEFAULT_SCOPE.to_string());
-        return all_repos(args, |l, _| render::resolve_in(l, &key, &scope));
+        return all_repos(args, |loaded, _| {
+            render::resolve_in(loaded, &key, args.scope.as_deref())
+        });
     }
     let l = match loaded(args) {
         Ok(l) => l,
         Err(c) => return c,
     };
-    let scope = args
-        .scope
-        .clone()
-        .unwrap_or_else(|| DEFAULT_SCOPE.to_string());
-    let a = match render::answer(&l.graph, &l.root, &key, &scope) {
+    let answer = match render::answer(&l.graph, &l.root, &key, args.scope.as_deref()) {
         Ok(a) => a,
         // Not a verdict: exit 3 says the corpus could not answer, and the
         // message names the slot rather than pretending to a result.
@@ -469,12 +463,12 @@ fn cmd_resolve(args: &Args) -> i32 {
         }
     };
     if args.json {
-        println!("{}", a.json());
+        println!("{}", answer.json());
     } else {
-        print!("{}", a.text());
+        print!("{}", answer.text());
         let _ = std::io::stdout().flush();
     }
-    a.exit()
+    answer.exit()
 }
 
 /// `aval relevant` — which decisions bear on what is about to be touched.
@@ -503,10 +497,7 @@ fn cmd_relevant(args: &Args) -> i32 {
         text: args.text.clone(),
         changed: args.changed,
         top: args.top.unwrap_or(relevant::DEFAULT_TOP),
-        scope: args
-            .scope
-            .clone()
-            .unwrap_or_else(|| DEFAULT_SCOPE.to_string()),
+        scope: args.scope.clone(),
     };
     if q.is_empty() {
         eprintln!(
@@ -812,6 +803,15 @@ fn cmd_check(args: &Args) -> i32 {
     findings.extend(manual_index(&l));
     findings.sort_by_key(|a| (a.layer, a.file.clone(), a.line));
 
+    // Warnings: the same condition as a cross-scope exit 5, reported before a
+    // query meets it. They never change the exit status.
+    let warnings = l.graph.in_scopes_conflicts();
+    if !args.json {
+        for warning in &warnings {
+            eprintln!("warning: {}", warning);
+        }
+    }
+
     if args.json {
         let j = Json::obj()
             .set("ok", findings.is_empty())
@@ -819,6 +819,13 @@ fn cmd_check(args: &Args) -> i32 {
             .set(
                 "findings",
                 findings
+                    .iter()
+                    .map(render::finding_json)
+                    .collect::<Vec<_>>(),
+            )
+            .set(
+                "warnings",
+                warnings
                     .iter()
                     .map(render::finding_json)
                     .collect::<Vec<_>>(),
@@ -1512,13 +1519,12 @@ fn cmd_history(args: &Args) -> i32 {
         Ok(k) => k,
         Err(c) => return c,
     };
-    let scope = args
-        .scope
-        .clone()
-        .unwrap_or_else(|| DEFAULT_SCOPE.to_string());
     if args.all_repos {
-        return all_repos(args, |l, _| render::history_in(l, &key, &scope));
+        return all_repos(args, |loaded, _| {
+            render::history_in(loaded, &key, args.scope.as_deref())
+        });
     }
+    let shown = args.scope.as_deref().unwrap_or(DEFAULT_SCOPE).to_string();
     let l = match loaded(args) {
         Ok(l) => l,
         Err(c) => return c,
@@ -1535,7 +1541,7 @@ fn cmd_history(args: &Args) -> i32 {
             .collect();
         let sug = aval_core::model::suggest(&key, names).map(|s| s.to_string());
         if args.json {
-            println!("{}", render::history_unknown_json("key", &key, &scope, sug));
+            println!("{}", render::history_unknown_json("key", &key, &shown, sug));
         } else {
             eprintln!("aval: `{}` is not a registered decision key", key);
             if let Some(g) = &sug {
@@ -1544,7 +1550,15 @@ fn cmd_history(args: &Args) -> i32 {
         }
         return 7;
     }
-    if !l.graph.registry().has_scope(&scope) {
+    let Some(scope) = args.scope.as_deref() else {
+        if args.json {
+            println!("{}", render::history_default_json(&l.graph, &key));
+        } else {
+            print!("{}", render::history_default_text(&l.graph, &key));
+        }
+        return 0;
+    };
+    if !l.graph.registry().has_scope(scope) {
         let names: Vec<&str> = l
             .graph
             .registry()
@@ -1552,11 +1566,11 @@ fn cmd_history(args: &Args) -> i32 {
             .iter()
             .map(|s| s.as_str())
             .collect();
-        let sug = aval_core::model::suggest(&scope, names).map(|s| s.to_string());
+        let sug = aval_core::model::suggest(scope, names).map(|name| name.to_string());
         if args.json {
             println!(
                 "{}",
-                render::history_unknown_json("scope", &key, &scope, sug)
+                render::history_unknown_json("scope", &key, scope, sug)
             );
         } else {
             eprintln!("aval: `{}` is not a declared scope", scope);
@@ -1566,10 +1580,7 @@ fn cmd_history(args: &Args) -> i32 {
         }
         return 7;
     }
-    let slot = Slot {
-        key: &key,
-        scope: &scope,
-    };
+    let slot = Slot { key: &key, scope };
     let chain = l.graph.history(slot);
     if args.json {
         println!("{}", render::history_json(&l.graph, slot, &chain));

@@ -445,6 +445,32 @@ fn a_broken_pack_is_refused_whole_and_writes_nothing() {
 }
 
 #[test]
+fn a_pack_carrying_in_scopes_is_refused() {
+    let fleet = producer("in-scopes-fleet");
+    let pack_path = fleet.join("aval.pack");
+    let mut pack = fs::read_to_string(&pack_path).unwrap();
+    pack.push_str("in_scopes:\n  - effect-stack\n");
+    fs::write(&pack_path, pack).unwrap();
+    git(&fleet, &["add", "-A"]);
+    git(&fleet, &["commit", "-qm", "publish in_scopes"]);
+
+    let consumer = consumer_pack_only("in-scopes-consumer");
+    let before = fs::read_to_string(consumer.join(".adr.yaml")).unwrap();
+    let got = run(&consumer, &["add", &src(&fleet)]);
+    assert_eq!(got.code, 1, "{}", got.all());
+    assert!(got.err.contains("not readable"), "{}", got.err);
+    assert!(
+        got.err.contains("a pack carries no `in_scopes`"),
+        "{}",
+        got.err
+    );
+    assert_eq!(
+        fs::read_to_string(consumer.join(".adr.yaml")).unwrap(),
+        before
+    );
+}
+
+#[test]
 fn an_unresolvable_revision_fails_before_writing() {
     let fleet = producer("rev-fleet");
     let c = consumer_pack_only("rev-consumer");

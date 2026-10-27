@@ -97,7 +97,7 @@ never reaches the place where code is written or judged:
 - Release via `tag-release`; `aval add` refresh in each repo vendoring the
   `decisions` pack (relais `.adr/packs/decisions.pack`, …) after Phase 1.
 
-### [x] Phase 3 — relais: workers and reviewer get the code rules (repo `relais`) — shipped; override check pending (Outcome)
+### [x] Phase 3 — relais: workers and reviewer get the code rules (repo `relais`) — shipped; all live checks done (Outcome)
 
 - `context/guidance.rs`: `rules_args` becomes `aval rules --level constraint --full --json`
   (one spawn); `code_rules` are those with `governs: code`, the rest feed
@@ -274,10 +274,15 @@ Next-session checks (2026-10-24, plugin 0.31.0 loaded):
   with a blocking `names.reveal-intent` finding (it was `rework` in the
   session that predated the file: agent definitions load at session start).
 
+Override check (2026-10-27, relais 0.34): one patch (`fixture_formula.rs`
+with `n`, `s`, `d`) reviewed twice. Without a decision, `names.reveal-intent`
+flagged `n`, `s`, `d`. With a scratch-branch decision (ADR-0012
+`code.formula-notation`, overriding the rule for that file), all four
+candidates were ruled `fine` citing the decision's precedence and no naming
+finding was raised. Scratch branches never pushed; runs abandoned; the
+candidate fed back `reverted`.
+
 Not done yet:
-- The override check (a patch covered by an overriding decision draws no
-  finding): no repository has a decision that overrides a code rule; it needs
-  one built for the purpose.
 - Negative control (a clean patch reviewed with no code-rule finding) and the
   count of repairs caused by rule findings over 20 runs: due with the cost
   check, about 2026-11-07.
