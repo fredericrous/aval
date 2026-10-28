@@ -268,7 +268,9 @@ Phase 1 (aval, branch binary; `cargo test` green through the pre-commit gate):
 - aval (Phase 1): round 1 approve-with-changes (105k, 145 s) — 3 blocking
   rule findings (banners, an output-parameter helper, one-letter names), all
   fixed; Delta approve-with-changes (117k, 35 s), its two lows done here.
-- Next: release aval 1.11.0, then Phase 2 (decisions ADR-0046).
+- Phases 2–4: decisions round 1 approve-with-changes (47k, 33 s), Delta
+  approve; dotfiles approve after one Delta; relais round 1
+  approve-with-changes (62k, 78 s), Delta approve. None outstanding.
 
 ## Outcome
 
@@ -318,7 +320,8 @@ Not observed yet:
 - The relais end-to-end review in customer-vision (decisions block naming
   `ui.design-system (ADR-0006, duro-stack)`): two runs waited out the
   30-minute lease budget while other sessions held the heavy slots, and the
-  rendering needs the next relais release. Runs after that release.
+  rendering needs the next relais release. Runs after that release. The relais
+  pointer plan stays `active` until it is recorded.
 - The aval MCP server of a session started before 1.11.0 still runs the old
   binary and refuses a repository with `in_scopes`; a new session picks it up.
 - Measure after release (above): due about 2026-11-04.
