@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 branch: feat/in-scopes
 repos: [aval, decisions, relais, dotfiles, activity-vision, application-landscape, customer-vision, duro-app, kb-vision, social-planner, website-builder, duro-design-system]
 adrs: [ADR-0043, ADR-0039]
@@ -130,7 +130,7 @@ raised. Scratch branches never pushed; runs abandoned; candidate fed back
 - Same PR: record the override check in the code-rules plan's Outcome
   (`docs/plans/2026-10-23-code-rules-reach-writers-reviewers.md`).
 
-### Phase 2 — decisions ADR-0046 (repo `decisions`)
+### [x] Phase 2 — decisions ADR-0046 (repo `decisions`)
 
 - ADR-0046 `guidance.scope-membership`: a repository declares the scopes it is
   in with `in_scopes`, and aval answers at them by default; who sets it (the
@@ -142,7 +142,7 @@ raised. Scratch branches never pushed; runs abandoned; candidate fed back
   cannot tell the axes apart). Key declared in `.adr.yaml`.
 - CI pin `AVAL_VERSION` → 1.11.0 first; `aval pack --write`, HEADS, hook.
 
-### Phase 3 — fleet declarations (one PR per repository)
+### [x] Phase 3 — fleet declarations (one PR per repository)
 
 `in_scopes` per the dependency survey (root `package.json`):
 
@@ -171,7 +171,7 @@ add the line, drop any hand-typed `--scope` (application-landscape
 repository: no pointer plan, no implementation review (ceremony scales with
 size). `monorepo` / `single-package` are not declared: no record decides at them.
 
-### Phase 4 — callers say where the scope comes from (relais, dotfiles)
+### [x] Phase 4 — callers say where the scope comes from (relais, dotfiles)
 
 - relais: the reviewer's decisions block renders the answering scope
   (`key (record, scope): choice`); the `holds-until:` at
@@ -269,5 +269,58 @@ Phase 1 (aval, branch binary; `cargo test` green through the pre-commit gate):
   rule findings (banners, an output-parameter helper, one-letter names), all
   fixed; Delta approve-with-changes (117k, 35 s), its two lows done here.
 - Next: release aval 1.11.0, then Phase 2 (decisions ADR-0046).
+
+## Outcome
+
+Shipped 2026-10-27/28:
+- Phase 1 — aval 1.11.0 (aval#46, release aval#47), installed.
+- Phase 2 — decisions ADR-0046 `guidance.scope-membership` (decisions#102),
+  CI pinned to 1.11.0.
+- Phase 3 — `in_scopes` declared in all eight repositories, each with its aval
+  pin moved to 1.11.0, pack and hook refreshed: customer-vision#26 first
+  (Forgejo), then activity-vision#9, application-landscape#334, kb-vision#53,
+  social-planner#63, website-builder#224 (Forgejo), duro-app#155,
+  duro-design-system#149 (GitHub).
+- Phase 4 — dotfiles#51 (skill and agent texts), relais#323 (decisions block names
+  the scope, cross-scope contradiction keeps heads and `by_scope`, guidance
+  budget fix).
+
+Fleet record (aval 1.11.0, before → after, all eight before were `undecided`
+on both keys):
+
+| repo | in_scopes | ui.design-system | stack.effects-runtime |
+|---|---|---|---|
+| activity-vision | effect-stack | undecided (correct) | active ADR-0001 |
+| application-landscape | effect-stack, duro-stack | active ADR-0006 | active ADR-0001 |
+| customer-vision | effect-stack, duro-stack | active ADR-0006 | active ADR-0001 |
+| duro-app | effect-stack, duro-stack | active ADR-0006 | active ADR-0001 |
+| kb-vision | effect-stack, duro-stack | active ADR-0006 | active ADR-0001 |
+| social-planner | effect-stack, duro-stack | active ADR-0006 | active ADR-0001 |
+| website-builder | duro-stack | active ADR-0006 | undecided (correct) |
+| duro-design-system | duro-stack | active ADR-0006 | undecided (correct) |
+
+`aval check` clean in each; CI green in each (application-landscape's first CI
+run failed on a relay integration test that timed out under load and passes
+alone; the re-run was green). In customer-vision, `aval relevant` for a UI file
+ranks `ui.design-system`, `ui.measures`, `ui.policy-enforcement`,
+`ui.mockup-handoff` (duro-stack) and `stack.web-framework` (effect-stack)
+active, and `amont-agent review-brief` on a scratch UI change carries
+ADR-0006 at duro-stack. application-landscape's hand-typed `--scope
+duro-stack` (`CLAUDE.md`) is gone.
+
+Found during Phase 4 and fixed in relais: the worker's `aval relevant --top 20`
+(ADR-0043 work) pushed the ranked block past the 16 KiB guidance budget, and
+`fit_budget` dropped it whole, so a worker got no decisions at all. Whole
+entries now leave from the end, rules before keys, named in a `relevant
+partial` gap; worker lines name the answering scope.
+
+Not observed yet:
+- The relais end-to-end review in customer-vision (decisions block naming
+  `ui.design-system (ADR-0006, duro-stack)`): two runs waited out the
+  30-minute lease budget while other sessions held the heavy slots, and the
+  rendering needs the next relais release. Runs after that release.
+- The aval MCP server of a session started before 1.11.0 still runs the old
+  binary and refuses a repository with `in_scopes`; a new session picks it up.
+- Measure after release (above): due about 2026-11-04.
 
 <!-- panel: repos=aval,decisions,relais,dotfiles reviewers=architect,backend,po,lang:rust,unix,codex body-sha=62783cdbc00f -->
