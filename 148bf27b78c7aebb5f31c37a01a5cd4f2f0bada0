@@ -1,0 +1,15 @@
+amont-provenance-v1
+commit ef1f01a35f8dd0a8b60a815905a6c554a574110b
+tree 148bf27b78c7aebb5f31c37a01a5cd4f2f0bada0
+canon 3511d90be85519917b6f145ebc129d4a48e644f2
+plan docs/plans/2026-10-27-repo-declares-its-scopes.md 174cd81bfee205da3f03a6e0c87615f61a50fa57c5f75960ec8dfdddb689f0eb
+review reviewed 784ee093dea2b9ccc75eb9e8f5971497096827eeb907f7f4a44b8ec76c37fddb
+preview not-required
+producer amont-agent 3.8.0
+
+-----BEGIN SSH SIGNATURE-----
+U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg7UOvJ8myo4dhW907VFty7T/bUV
+RFQerK+MWJ4bjChwcAAAAQYW1vbnQtcHJvdmVuYW5jZQAAAAAAAAAGc2hhNTEyAAAAUwAA
+AAtzc2gtZWQyNTUxOQAAAEDRmi47Z4aniKXoRBCIrm2JCCEksK1UJnsrblxoMqOMNLc7rA
+CUXk6rNBsLDfMFZlDGYNeU3Fr1ZbfBPX55r/kN
+-----END SSH SIGNATURE-----
