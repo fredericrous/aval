@@ -65,6 +65,12 @@ others   0 ok · 1 findings or stale
 always   1 tool failure · 2 usage · 3 unreadable or invalid corpus
 mcp      0 stdin closed · 1 transport failure · 2 usage. Never 3: a
          corpus that will not load is reported in the tool result.
+mcp install|uninstall  0 done, previewed, already in the wanted state, or (without
+         --check) no `claude` on PATH · 1 `claude` failed; --check: 1 not registered
+         (install) or registered (uninstall) · 2 usage, incl. --write with
+         --check · 3 --check, `claude` absent or could not answer
+hook uninstall  0 · 1 write failed; --check: 1 something of aval's is left
+         · 2 usage, incl. --write with --check · 3 unreadable settings
 repos    0 · 2 usage · 3 nothing found, or the directory unreadable
 ```
 

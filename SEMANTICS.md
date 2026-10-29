@@ -1400,6 +1400,10 @@ Low codes follow the duro CLI. Verdicts start at 4.
 | `aval history` | A | `0` · `2` · `3` · `7` |
 | `aval hook install` | — | `0` · `1` write failed · `2` · `3` unreadable settings |
 | `aval hook install --check` | — | `0` wired, and the script current or from a newer aval · `1` stale · `2` · `3` |
+| `aval mcp install` / `uninstall` | — | `0` done, previewed, already in the wanted state (`--write` when registered / not registered), or, without `--check`, no `claude` on PATH · `1` `claude` failed · `2` usage, including `--write` with `--check` · `3` with `--check`, `claude` is absent or could not say whether aval is registered |
+| `aval mcp install --check` / `uninstall --check` | — | `0` registered (install) / not registered (uninstall) · `1` the opposite · `2` · `3` `claude` is absent (line on stderr) or could not answer |
+| `aval hook uninstall` | — | `0` · `1` write failed · `2` usage, including `--write` with `--check` · `3` unreadable settings |
+| `aval hook uninstall --check` | — | `0` nothing of aval's left · `1` something is · `2` · `3` |
 | `aval pack` | A | `0` · `2` · `3` |
 | `aval pack --write` | A | `0` · `1` write failed · `2` · `3` |
 | `aval pack --check` | A + C | `0` fresh or not publishing · `1` stale · `2` · `3` |

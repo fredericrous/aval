@@ -57,7 +57,9 @@ Or `brew install fredericrous/tap/aval`, `cargo install aval`, or
 | `aval check` | every invariant; what the git hook and CI run |
 | `aval heads [--write\|--check]` | the `HEADS.md` projection |
 | `aval hook install` | put the heads in front of an agent at session start |
+| `aval hook uninstall` | remove what `hook install` wrote (`--write` to do it) |
 | `aval mcp` | the same answers as read-only MCP tools |
+| `aval mcp install` / `uninstall` | register or remove the server with Claude Code (`--write`, `--check`) |
 | `aval add <source>` | vendor another repository's decisions |
 
 Every command, option and exit code: [commands](docs/commands.md).

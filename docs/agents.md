@@ -63,6 +63,26 @@ changed. The stamp that rates the hour lives under `$XDG_CACHE_HOME/aval`
 (default `~/.cache/aval`), never in the repository. `aval add --check` by hand
 always answers in full.
 
+### Removing the hook
+
+```console
+$ aval hook uninstall            # previews what would be removed
+$ aval hook uninstall --write    # removes it
+$ aval hook uninstall --check    # exit 0 nothing left, 1 something is
+```
+
+It removes exactly what `install` wrote: `.claude/hooks/aval-heads.sh`, only
+when it carries aval's `# aval-hook: written by aval` marker (a script without
+it is somebody else's and is left alone), and the `SessionStart` entry that runs
+it in `.claude/settings.json`. Every other settings key, the file's indentation
+and its final newline stay as they were; keys are written in sorted order, as
+`install` writes them. So `hook uninstall` restores the settings file byte for
+byte only when it was in the shape `hook install` writes (sorted keys,
+two-space indent, final newline); any other file keeps its indentation and
+final newline and differs from the original only in key order.
+`.claude/aval-hook.local.md` is yours and is never
+touched.
+
 ## The MCP server
 
 The hook pushes; **`aval mcp` lets an agent pull** — the same answers as native
@@ -72,6 +92,23 @@ a session:
 ```console
 $ claude mcp add aval -- aval mcp
 ```
+
+or let aval do it, at Claude Code user scope, with the absolute path of the
+binary that is running:
+
+```console
+$ aval mcp install               # shows the `claude mcp add --scope user …` it would run
+$ aval mcp install --write       # runs it
+$ aval mcp install --check       # exit 0 registered, 1 not, 3 `claude` absent or could not answer
+$ aval mcp uninstall --write     # claude mcp remove --scope user aval
+```
+
+`--check` asks `claude mcp get aval`. With no `claude` on PATH, `--check`
+prints one line on stderr and exits 3 (unknown, never 0, which means
+registered); `--write` and the preview print it on stderr and exit 0: there is
+nothing to register with. Messages that are not the answer asked for go to
+stderr. The registered path is the first `aval` on PATH when it is the running
+binary (a Homebrew link rather than the Cellar path), else the running binary.
 
 Ten read-only tools: `aval_resolve`, `aval_relevant`, `aval_keys`,
 `aval_traits`, `aval_heads`, `aval_show`, `aval_history`, `aval_rules`,
