@@ -316,12 +316,14 @@ Found during Phase 4 and fixed in relais: the worker's `aval relevant --top 20`
 entries now leave from the end, rules before keys, named in a `relevant
 partial` gap; worker lines name the answering scope.
 
+Observed after the relais v0.35.1 release (2026-10-29): a relais review run in
+customer-vision (run-65eeb3c270e97-1545c, isolated, accepted) gave both the
+worker and the reviewer `ui.design-system` (decisions:ADR-0006, duro-stack),
+with `stack.web-framework` (effect-stack), `ui.policy-enforcement`,
+`ui.mockup-handoff` and `ui.measures` (duro-stack) in the reviewer's decisions
+block. The relais pointer plan is closed.
+
 Not observed yet:
-- The relais end-to-end review in customer-vision (decisions block naming
-  `ui.design-system (ADR-0006, duro-stack)`): two runs waited out the
-  30-minute lease budget while other sessions held the heavy slots, and the
-  rendering needs the next relais release. Runs after that release. The relais
-  pointer plan stays `active` until it is recorded.
 - The aval MCP server of a session started before 1.11.0 still runs the old
   binary and refuses a repository with `in_scopes`; a new session picks it up.
 - Measure after release (above): due about 2026-11-04.
