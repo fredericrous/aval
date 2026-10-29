@@ -7,7 +7,9 @@
 - **`aval mcp install|uninstall [--write] [--check]`** registers or removes
   aval's MCP server at Claude Code user scope through `claude mcp add|remove`;
   without `--write` it only shows the command. `--check` exits 0 registered,
-  1 not, 3 when `claude` cannot answer; no `claude` on PATH is one line, exit 0.
+  1 not, 3 when `claude` is absent or cannot answer; without `--check`, no
+  `claude` on PATH is one line on stderr, exit 0. Hints and done lines go to
+  stderr. The PATH `aval` is registered when it is the running binary.
 - **`aval hook uninstall [--write] [--check]`** removes the marker-owned
   `.claude/hooks/aval-heads.sh` and its `.claude/settings.json` entry, leaving
   other settings, their indentation and the final newline, and a script without

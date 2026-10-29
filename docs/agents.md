@@ -99,12 +99,16 @@ binary that is running:
 ```console
 $ aval mcp install               # shows the `claude mcp add --scope user …` it would run
 $ aval mcp install --write       # runs it
-$ aval mcp install --check       # exit 0 registered, 1 not, 3 `claude` could not answer
+$ aval mcp install --check       # exit 0 registered, 1 not, 3 `claude` absent or could not answer
 $ aval mcp uninstall --write     # claude mcp remove --scope user aval
 ```
 
-`--check` asks `claude mcp get aval`. With no `claude` on PATH each form prints
-one line saying so and exits 0: there is nothing to register with.
+`--check` asks `claude mcp get aval`. With no `claude` on PATH, `--check`
+prints one line on stderr and exits 3 (unknown, never 0, which means
+registered); `--write` and the preview print it on stderr and exit 0: there is
+nothing to register with. Messages that are not the answer asked for go to
+stderr. The registered path is the first `aval` on PATH when it is the running
+binary (a Homebrew link rather than the Cellar path), else the running binary.
 
 Ten read-only tools: `aval_resolve`, `aval_relevant`, `aval_keys`,
 `aval_traits`, `aval_heads`, `aval_show`, `aval_history`, `aval_rules`,

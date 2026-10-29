@@ -89,13 +89,17 @@ fn mcp_install_previews_without_write_and_registers_with_it() {
 
     let preview = run_with_path(&scratch_root, &path, &["mcp", "install"]);
     assert_eq!(preview.code, 0, "{}{}", preview.out, preview.err);
+    assert_eq!(preview.out.lines().count(), 1, "{}", preview.out);
     assert!(preview
         .out
-        .contains("would run: claude mcp add --scope user aval -- "));
+        .starts_with("would run: claude mcp add --scope user aval -- "));
+    assert!(preview.err.contains("pass --write"), "{}", preview.err);
     assert_eq!(log(&scratch_root), "", "a preview runs nothing");
 
     let done = run_with_path(&scratch_root, &path, &["mcp", "install", "--write"]);
     assert_eq!(done.code, 0, "{}{}", done.out, done.err);
+    assert_eq!(done.out, "", "a done line is talk, not data");
+    assert!(done.err.contains("ran: claude mcp add"), "{}", done.err);
     let logged = log(&scratch_root);
     let line = logged.lines().nth(1).expect("claude add was run after get");
     assert_eq!(logged.lines().next(), Some("mcp get aval"));
@@ -138,9 +142,9 @@ fn a_second_install_write_is_a_one_line_no_op() {
     );
     let again = run_with_path(&root, &path, &["mcp", "install", "--write"]);
     assert_eq!(again.code, 0, "{}{}", again.out, again.err);
-    assert_eq!(again.out.lines().count(), 1, "{}", again.out);
-    assert!(again.out.contains("already registered"), "{}", again.out);
-    assert_eq!(again.err, "");
+    assert_eq!(again.out, "");
+    assert_eq!(again.err.lines().count(), 1, "{}", again.err);
+    assert!(again.err.contains("already registered"), "{}", again.err);
     assert_eq!(
         log(&root)
             .lines()
@@ -157,8 +161,9 @@ fn uninstall_write_when_not_registered_is_a_one_line_no_op() {
     let path = with_system_tools(&fake_claude(&root, "missing"));
     let done = run_with_path(&root, &path, &["mcp", "uninstall", "--write"]);
     assert_eq!(done.code, 0, "{}{}", done.out, done.err);
-    assert_eq!(done.out.lines().count(), 1, "{}", done.out);
-    assert!(done.out.contains("not registered"), "{}", done.out);
+    assert_eq!(done.out, "");
+    assert_eq!(done.err.lines().count(), 1, "{}", done.err);
+    assert!(done.err.contains("not registered"), "{}", done.err);
     assert_eq!(log(&root), "mcp get aval\n", "no remove was attempted");
 }
 
@@ -209,20 +214,36 @@ fn mcp_check_reports_registered_not_registered_and_unknown() {
 }
 
 #[test]
-fn an_absent_claude_is_a_reported_gap_not_a_failure() {
+fn an_absent_claude_is_a_reported_gap_except_under_check() {
     let scratch_root = scratch("mcp-absent");
     let empty = scratch_root.join("empty");
     fs::create_dir_all(&empty).unwrap();
-    for args in [
-        &["mcp", "install", "--write"][..],
-        &["mcp", "uninstall", "--write"][..],
-        &["mcp", "install", "--check"][..],
+    for (args, code) in [
+        (&["mcp", "install", "--write"][..], 0),
+        (&["mcp", "uninstall", "--write"][..], 0),
+        (&["mcp", "install", "--check"][..], 3),
+        (&["mcp", "uninstall", "--check"][..], 3),
     ] {
         let got = run_with_path(&scratch_root, &empty, args);
-        assert_eq!(got.code, 0, "{args:?}: {}{}", got.out, got.err);
-        assert_eq!(got.out.lines().count(), 1, "one line: {}", got.out);
-        assert!(got.out.contains("`claude` is not on PATH"), "{}", got.out);
+        assert_eq!(got.code, code, "{args:?}: {}{}", got.out, got.err);
+        assert_eq!(got.out, "", "{args:?}");
+        assert_eq!(got.err.lines().count(), 1, "one line: {}", got.err);
+        assert!(got.err.contains("`claude` is not on PATH"), "{}", got.err);
     }
+}
+
+#[test]
+fn install_registers_the_path_link_to_the_running_binary() {
+    let root = scratch("mcp-link");
+    let fake_dir = fake_claude(&root, "missing");
+    let link = fake_dir.join("aval");
+    std::os::unix::fs::symlink(bin(), &link).unwrap();
+    let path = with_system_tools(&fake_dir);
+    let done = run_with_path(&root, &path, &["mcp", "install", "--write"]);
+    assert_eq!(done.code, 0, "{}{}", done.out, done.err);
+    let logged = log(&root);
+    let want = format!("mcp add --scope user aval -- {} mcp", link.display());
+    assert_eq!(logged.lines().nth(1), Some(want.as_str()), "{logged}");
 }
 
 fn hook_root(name: &str) -> PathBuf {

@@ -132,10 +132,11 @@ EXIT
     always   1 tool failure · 2 usage · 3 unreadable or invalid corpus
     mcp      0 stdin closed · 1 transport failure · 2 usage. Never 3: a
              corpus that will not load is reported in the tool result.
-    mcp install|uninstall  0 done, previewed, already in the wanted state, or
-             no `claude` on PATH (one line) · 1 failed · 2 usage, including
-             --write with --check · --check: 1 not registered (install) or
-             registered (uninstall) · 3 `claude` could not answer
+    mcp install|uninstall  0 done, previewed, already in the wanted state,
+             or (without --check) no `claude` on PATH · 1 failed; --check:
+             1 not registered (install) or registered (uninstall) · 2 usage,
+             including --write with --check · 3 --check, `claude` absent or
+             could not answer
     hook uninstall  --check: 0 nothing of aval's left · 1 something is
     repos    0 · 2 usage · 3 nothing found, or the directory unreadable
 ";
@@ -832,8 +833,8 @@ fn cmd_mcp_register(args: &Args, registration: Registration) -> i32 {
     if args.check {
         return match register::registered() {
             register::Registered::NoClaude => {
-                println!("aval mcp {verb} --check: `claude` is not on PATH; nothing to check");
-                0
+                eprintln!("aval mcp {verb} --check: `claude` is not on PATH; nothing to check");
+                E_INVALID
             }
             register::Registered::Unknown(why) => {
                 eprintln!("aval: cannot tell whether aval is registered: {why}");
@@ -864,27 +865,27 @@ fn cmd_mcp_register(args: &Args, registration: Registration) -> i32 {
                     return E_FAIL;
                 }
             };
-            register::add_args(&exe)
+            register::add_args(&register::registered_path(&exe))
         }
         Registration::Remove => register::remove_args(),
     };
     let shown = format!("claude {}", claude_args.join(" "));
     if !args.write {
         println!("would run: {shown}");
-        println!("pass --write to run it");
+        eprintln!("pass --write to run it");
         return 0;
     }
     match register::registered() {
         register::Registered::NoClaude => {
-            println!("aval: `claude` is not on PATH; nothing was registered or removed");
+            eprintln!("aval: `claude` is not on PATH; nothing was registered or removed");
             return 0;
         }
         register::Registered::Yes if matches!(registration, Registration::Add) => {
-            println!("aval mcp install: already registered; nothing to do");
+            eprintln!("aval mcp install: already registered; nothing to do");
             return 0;
         }
         register::Registered::No if matches!(registration, Registration::Remove) => {
-            println!("aval mcp uninstall: not registered; nothing to do");
+            eprintln!("aval mcp uninstall: not registered; nothing to do");
             return 0;
         }
         // Unknown: let the add/remove itself answer.
@@ -893,7 +894,7 @@ fn cmd_mcp_register(args: &Args, registration: Registration) -> i32 {
     }
     match register::run_claude(&claude_args) {
         register::Ran::Absent => {
-            println!("aval: `claude` is not on PATH; nothing was registered or removed");
+            eprintln!("aval: `claude` is not on PATH; nothing was registered or removed");
             0
         }
         register::Ran::Unable(why) => {
@@ -901,7 +902,7 @@ fn cmd_mcp_register(args: &Args, registration: Registration) -> i32 {
             E_FAIL
         }
         register::Ran::Exited { code: Some(0), .. } => {
-            println!("ran: {shown}");
+            eprintln!("ran: {shown}");
             0
         }
         register::Ran::Exited { code, output } => {
@@ -1267,11 +1268,12 @@ fn cmd_hook_uninstall(args: &Args) -> i32 {
             println!("aval hook uninstall --check: nothing of aval's is installed");
             return 0;
         }
-        println!("aval hook uninstall --check: installed; run `aval hook uninstall --write`");
+        println!("aval hook uninstall --check: installed");
+        eprintln!("run `aval hook uninstall --write` to remove it");
         return E_FAIL;
     }
     if pending > 0 {
-        println!("pass --write to remove it");
+        eprintln!("pass --write to remove it");
     }
     0
 }

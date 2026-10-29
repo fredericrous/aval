@@ -5,7 +5,7 @@
 //! files. An absent `claude` is a gap worth one line, not a failure: the
 //! machine simply has no Claude Code to register with.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -33,6 +33,32 @@ pub fn add_args(exe: &Path) -> Vec<String> {
         .map(|s| s.to_string())
         .chain([exe.display().to_string(), "mcp".to_string()])
         .collect()
+}
+
+/// The path to register for the running binary `exe`: the first `aval` on
+/// PATH when it is the same file (canonicalized), so a Homebrew install
+/// registers its stable link rather than the versioned Cellar path.
+pub fn registered_path(exe: &Path) -> PathBuf {
+    let Some(path_var) = std::env::var_os("PATH") else {
+        return exe.to_path_buf();
+    };
+    let Some(running) = exe.canonicalize().ok() else {
+        return exe.to_path_buf();
+    };
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(SERVER_NAME);
+        if !candidate.is_file() {
+            continue;
+        }
+        // Only the first `aval` on PATH counts: a later one is shadowed.
+        if candidate.canonicalize().ok().as_deref() == Some(running.as_path())
+            && candidate.is_absolute()
+        {
+            return candidate;
+        }
+        break;
+    }
+    exe.to_path_buf()
 }
 
 /// `claude mcp remove --scope user aval`, as argv after `claude`.
