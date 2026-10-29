@@ -17,6 +17,7 @@ pub mod mcp;
 pub mod migrate;
 pub mod packfile;
 pub mod provenance;
+pub mod register;
 pub mod relevant;
 pub mod render;
 pub mod status;

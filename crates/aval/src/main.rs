@@ -5,7 +5,7 @@
 //! section 14. The rule that shapes all of them is that a code meaning "I could
 //! not reach a verdict" never shares a range with a verdict.
 
-use aval::{add, heads, hook, links, load, migrate, packfile, relevant, render, status};
+use aval::{add, heads, hook, links, load, migrate, packfile, register, relevant, render, status};
 
 use aval_core::graph::Verdict;
 use aval_core::json::Json;
@@ -78,6 +78,9 @@ USAGE
     aval history <key> [--scope <scope>]   the chain, which is history not authority
     aval migrate <dir>                     report what converting a legacy corpus needs
     aval hook install [--check]            put the heads in front of an agent
+    aval hook uninstall [--write]          remove what install wrote: the marked
+                        [--check]          script and its settings entry; without
+                                           --write only says what it would remove
     aval pack [--write | --check]          this corpus's declarations, for others to read
     aval add <source>… [--dry-run]         vendor another repository's declarations
     aval add --check [--quiet]             are the vendored packs still current;
@@ -85,6 +88,10 @@ USAGE
                                            --budget kills a remote call late
     aval mcp                               serve the corpus as MCP tools on
                                            stdio, read-only, until stdin closes
+    aval mcp install [--write] [--check]   register this binary with Claude Code
+                                           (user scope); without --write only
+                                           shows the command it would run
+    aval mcp uninstall [--write] [--check] remove that registration
     aval repos                             what is answering from here: this
                                            corpus, or every corpus one level
                                            down when there is none above
@@ -125,6 +132,11 @@ EXIT
     always   1 tool failure · 2 usage · 3 unreadable or invalid corpus
     mcp      0 stdin closed · 1 transport failure · 2 usage. Never 3: a
              corpus that will not load is reported in the tool result.
+    mcp install|uninstall  0 done, previewed, already in the wanted state, or
+             no `claude` on PATH (one line) · 1 failed · 2 usage, including
+             --write with --check · --check: 1 not registered (install) or
+             registered (uninstall) · 3 `claude` could not answer
+    hook uninstall  --check: 0 nothing of aval's left · 1 something is
     repos    0 · 2 usage · 3 nothing found, or the directory unreadable
 ";
 
@@ -781,11 +793,126 @@ fn cmd_rule(args: &Args) -> i32 {
 /// Reads no corpus here: a registry mid-edit must not take the surface away,
 /// and each call loads the working tree fresh anyway.
 fn cmd_mcp(args: &Args) -> i32 {
+    if let Some(word @ ("install" | "uninstall")) = args.positional.first().map(String::as_str) {
+        if args.positional.len() > 1 {
+            eprintln!("aval: `mcp {word}` takes no arguments");
+            return E_USAGE;
+        }
+        let registration = if word == "install" {
+            Registration::Add
+        } else {
+            Registration::Remove
+        };
+        return cmd_mcp_register(args, registration);
+    }
     if !args.positional.is_empty() {
         eprintln!("aval: `mcp` takes no arguments");
         return E_USAGE;
     }
     aval::mcp::serve(&args.dir)
+}
+
+/// Which way `aval mcp install|uninstall` changes the registration.
+#[derive(Clone, Copy)]
+enum Registration {
+    Add,
+    Remove,
+}
+
+/// `aval mcp install|uninstall` — registration with Claude Code, user scope.
+fn cmd_mcp_register(args: &Args, registration: Registration) -> i32 {
+    let verb = match registration {
+        Registration::Add => "install",
+        Registration::Remove => "uninstall",
+    };
+    if args.write && args.check {
+        eprintln!("aval: `--write` and `--check` are mutually exclusive");
+        return E_USAGE;
+    }
+    if args.check {
+        return match register::registered() {
+            register::Registered::NoClaude => {
+                println!("aval mcp {verb} --check: `claude` is not on PATH; nothing to check");
+                0
+            }
+            register::Registered::Unknown(why) => {
+                eprintln!("aval: cannot tell whether aval is registered: {why}");
+                E_INVALID
+            }
+            register::Registered::Yes => {
+                println!("aval mcp {verb} --check: registered");
+                match registration {
+                    Registration::Add => 0,
+                    Registration::Remove => E_FAIL,
+                }
+            }
+            register::Registered::No => {
+                println!("aval mcp {verb} --check: not registered");
+                match registration {
+                    Registration::Add => E_FAIL,
+                    Registration::Remove => 0,
+                }
+            }
+        };
+    }
+    let claude_args = match registration {
+        Registration::Add => {
+            let exe = match std::env::current_exe() {
+                Ok(path) => path,
+                Err(e) => {
+                    eprintln!("aval: cannot find the running aval: {e}");
+                    return E_FAIL;
+                }
+            };
+            register::add_args(&exe)
+        }
+        Registration::Remove => register::remove_args(),
+    };
+    let shown = format!("claude {}", claude_args.join(" "));
+    if !args.write {
+        println!("would run: {shown}");
+        println!("pass --write to run it");
+        return 0;
+    }
+    match register::registered() {
+        register::Registered::NoClaude => {
+            println!("aval: `claude` is not on PATH; nothing was registered or removed");
+            return 0;
+        }
+        register::Registered::Yes if matches!(registration, Registration::Add) => {
+            println!("aval mcp install: already registered; nothing to do");
+            return 0;
+        }
+        register::Registered::No if matches!(registration, Registration::Remove) => {
+            println!("aval mcp uninstall: not registered; nothing to do");
+            return 0;
+        }
+        // Unknown: let the add/remove itself answer.
+        register::Registered::Yes | register::Registered::No | register::Registered::Unknown(_) => {
+        }
+    }
+    match register::run_claude(&claude_args) {
+        register::Ran::Absent => {
+            println!("aval: `claude` is not on PATH; nothing was registered or removed");
+            0
+        }
+        register::Ran::Unable(why) => {
+            eprintln!("aval: {why}");
+            E_FAIL
+        }
+        register::Ran::Exited { code: Some(0), .. } => {
+            println!("ran: {shown}");
+            0
+        }
+        register::Ran::Exited { code, output } => {
+            eprintln!(
+                "aval: `{shown}` failed ({}): {}",
+                code.map_or("signal".to_string(), |c| format!("exit {c}")),
+                output.trim()
+            );
+            E_FAIL
+        }
+    }
 }
 
 fn cmd_check(args: &Args) -> i32 {
@@ -992,17 +1119,19 @@ fn heads_json_or_text(args: &Args, state: &str, path: &std::path::Path, findings
 
 /// `aval hook install` — the session-start hook.
 ///
-/// The install is the whole command: there is no uninstall, because removing
-/// the entry from `.claude/settings.json` and deleting one script is a thing a
-/// person can do correctly without a subcommand that might do it wrongly.
+/// `uninstall` removes exactly what install wrote, and previews without
+/// `--write`.
 fn cmd_hook(args: &Args) -> i32 {
-    let what = match one_positional(args, "`install`") {
+    let what = match one_positional(args, "`install` or `uninstall`") {
         Ok(k) => k,
         Err(c) => return c,
     };
+    if what == "uninstall" {
+        return cmd_hook_uninstall(args);
+    }
     if what != "install" {
         eprintln!(
-            "aval: unknown hook command `{}`; the only one is `install`",
+            "aval: unknown hook command `{}`; the commands are `install` and `uninstall`",
             what
         );
         return E_USAGE;
@@ -1037,6 +1166,7 @@ fn cmd_hook(args: &Args) -> i32 {
             hook::Status::Unchanged => "ok",
             hook::Status::Stale => "stale",
             hook::Status::Newer => "newer",
+            hook::Status::Removed | hook::Status::Present | hook::Status::Foreign => "ok",
         };
         println!("  {:<6} {}  ({})", word, c.path, c.detail);
     }
@@ -1087,6 +1217,61 @@ fn cmd_hook(args: &Args) -> i32 {
         for p in &report.ignored {
             println!("  !{}", p);
         }
+    }
+    0
+}
+
+fn cmd_hook_uninstall(args: &Args) -> i32 {
+    if args.write && args.check {
+        eprintln!("aval: `--write` and `--check` are mutually exclusive");
+        return E_USAGE;
+    }
+    let removal = if args.write {
+        hook::Removal::Write
+    } else {
+        hook::Removal::Preview
+    };
+    let report = match hook::uninstall(&args.dir, removal) {
+        Ok(r) => r,
+        Err(hook::Error::SettingsUnparseable(e)) => {
+            eprintln!(
+                "aval: {} is not valid JSON ({}) — fix or remove it, then run this again",
+                hook::SETTINGS_PATH,
+                e
+            );
+            return E_INVALID;
+        }
+        Err(hook::Error::Io(e)) => {
+            eprintln!("aval: {}", e);
+            return E_FAIL;
+        }
+    };
+    let mut pending = 0;
+    for c in &report.changes {
+        let word = match c.status {
+            hook::Status::Removed => "removed",
+            hook::Status::Present => {
+                pending += 1;
+                "would remove"
+            }
+            hook::Status::Foreign => "left",
+            hook::Status::Written
+            | hook::Status::Unchanged
+            | hook::Status::Stale
+            | hook::Status::Newer => "ok",
+        };
+        println!("  {:<12} {}  ({})", word, c.path, c.detail);
+    }
+    if args.check {
+        if pending == 0 {
+            println!("aval hook uninstall --check: nothing of aval's is installed");
+            return 0;
+        }
+        println!("aval hook uninstall --check: installed; run `aval hook uninstall --write`");
+        return E_FAIL;
+    }
+    if pending > 0 {
+        println!("pass --write to remove it");
     }
     0
 }

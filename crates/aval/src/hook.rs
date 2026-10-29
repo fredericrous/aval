@@ -318,7 +318,7 @@ pub struct Change {
     pub detail: String,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Written,
     Unchanged,
@@ -328,6 +328,12 @@ pub enum Status {
     /// rewritten, in either mode: two people on different releases would
     /// otherwise take turns rewriting the file.
     Newer,
+    /// `uninstall` wrote this removal.
+    Removed,
+    /// `uninstall` without `--write`, or `--check`: this would be removed.
+    Present,
+    /// `uninstall` found a script without aval's marker and left it alone.
+    Foreign,
 }
 
 /// An `AVAL_VERSION:` pin found in a workflow file.
@@ -536,6 +542,205 @@ pub fn install(root: &Path, check: bool) -> Result<Report, Error> {
         ignored,
         pins_behind,
         pins_ahead,
+    })
+}
+
+/// Does this script carry aval's marker in its header? A file without it is
+/// somebody else's, whatever its name.
+fn has_marker(script: &str) -> bool {
+    script
+        .lines()
+        .take(5)
+        .any(|l| l.starts_with(VERSION_MARKER))
+}
+
+/// The settings text with aval's hook entry removed, or `None` when there is
+/// nothing of aval's in it. Groups and containers that the removal leaves empty
+/// go with it; every other key stays. Indentation and the final newline are
+/// taken from the original; key order is the sorted order `install` also
+/// writes.
+fn settings_without_ours(current: &str) -> Result<Option<String>, Error> {
+    let mut root = json::parse(current).map_err(Error::SettingsUnparseable)?;
+    let is_ours = |e: &Json| {
+        e.get("command")
+            .and_then(|c| c.as_str())
+            .is_some_and(|c| c.contains(SCRIPT_PATH))
+    };
+    let Some(hooks) = root.get("hooks").cloned() else {
+        return Ok(None);
+    };
+    let Some(groups) = hooks.get("SessionStart").and_then(|s| s.as_arr()) else {
+        return Ok(None);
+    };
+    let mut removed = false;
+    let mut kept: Vec<Json> = Vec::new();
+    for group in groups {
+        let entries: Vec<Json> = group
+            .get("hooks")
+            .and_then(|h| h.as_arr())
+            .map(|a| a.to_vec())
+            .unwrap_or_default();
+        let remaining: Vec<Json> = entries.iter().filter(|e| !is_ours(e)).cloned().collect();
+        if remaining.len() == entries.len() {
+            kept.push(group.clone());
+            continue;
+        }
+        removed = true;
+        if !remaining.is_empty() {
+            kept.push(group.clone().set("hooks", remaining));
+        }
+    }
+    if !removed {
+        return Ok(None);
+    }
+    let mut hooks = hooks;
+    hooks = if kept.is_empty() {
+        without_key(hooks, "SessionStart")
+    } else {
+        hooks.set("SessionStart", kept)
+    };
+    root = if hooks == Json::obj() {
+        without_key(root, "hooks")
+    } else {
+        root.set("hooks", hooks)
+    };
+    if root == Json::obj() {
+        return Ok(Some(String::new()));
+    }
+    let mut out = String::new();
+    root.write_pretty(&mut out, 0);
+    let unit = indent_unit(current);
+    if unit != "  " {
+        out = out
+            .lines()
+            .map(|l| {
+                let body = l.trim_start_matches(' ');
+                let levels = (l.len() - body.len()) / 2;
+                format!("{}{}", unit.repeat(levels), body)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    if current.ends_with('\n') {
+        out.push('\n');
+    }
+    Ok(Some(out))
+}
+
+/// `root` minus one top-level key.
+fn without_key(root: Json, key: &str) -> Json {
+    let mut out = Json::obj();
+    if let Json::Obj(map) = root {
+        for (k, v) in map {
+            if k != key {
+                out = out.set(&k, v);
+            }
+        }
+    }
+    out
+}
+
+/// The leading whitespace of the first indented line: how this file indents.
+fn indent_unit(text: &str) -> String {
+    text.lines()
+        .find(|l| l.starts_with(' ') || l.starts_with('\t'))
+        .map(|l| l[..l.len() - l.trim_start().len()].to_string())
+        .unwrap_or_else(|| "  ".to_string())
+}
+
+/// Whether `uninstall` changes the disk or only reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Removal {
+    /// Nothing on disk changes; the report says what would be removed.
+    Preview,
+    /// The removal is carried out.
+    Write,
+}
+
+/// Remove exactly what `install` wrote: the marker-owned script and the
+/// settings entry that runs it. With [`Removal::Preview`] nothing on disk
+/// changes and the report says what would be removed.
+pub fn uninstall(root: &Path, removal: Removal) -> Result<Report, Error> {
+    let write = removal == Removal::Write;
+    let mut changes = Vec::new();
+    let script_path = root.join(SCRIPT_PATH);
+    let settings_path = root.join(SETTINGS_PATH);
+    let io = |p: &Path, e: std::io::Error| Error::Io(format!("{}: {}", p.display(), e));
+
+    // Decide both before touching either, as install does.
+    let drop_script = match read(&script_path) {
+        None => {
+            changes.push(Change {
+                path: SCRIPT_PATH.to_string(),
+                status: Status::Unchanged,
+                detail: "not there".to_string(),
+            });
+            false
+        }
+        Some(have) if has_marker(&have) => true,
+        Some(_) => {
+            changes.push(Change {
+                path: SCRIPT_PATH.to_string(),
+                status: Status::Foreign,
+                detail: "no aval marker — not ours, left alone".to_string(),
+            });
+            false
+        }
+    };
+    let next = match read(&settings_path) {
+        None => None,
+        Some(have) if have.trim().is_empty() => None,
+        Some(have) => settings_without_ours(&have)?,
+    };
+    let verb = if write {
+        Status::Removed
+    } else {
+        Status::Present
+    };
+
+    if drop_script {
+        if write {
+            std::fs::remove_file(&script_path).map_err(|e| io(&script_path, e))?;
+            // Only if empty: `remove_dir` refuses otherwise, and that is the point.
+            for dir in [".claude/hooks", ".claude"] {
+                if std::fs::remove_dir(root.join(dir)).is_err() {
+                    break;
+                }
+            }
+        }
+        changes.push(Change {
+            path: SCRIPT_PATH.to_string(),
+            status: verb,
+            detail: "aval's script".to_string(),
+        });
+    }
+    match next {
+        None => changes.push(Change {
+            path: SETTINGS_PATH.to_string(),
+            status: Status::Unchanged,
+            detail: "no aval entry".to_string(),
+        }),
+        Some(body) => {
+            if write {
+                if body.is_empty() {
+                    std::fs::remove_file(&settings_path).map_err(|e| io(&settings_path, e))?;
+                    let _ = std::fs::remove_dir(root.join(".claude")); // only if empty; non-empty is the point
+                } else {
+                    std::fs::write(&settings_path, body).map_err(|e| io(&settings_path, e))?;
+                }
+            }
+            changes.push(Change {
+                path: SETTINGS_PATH.to_string(),
+                status: verb,
+                detail: "aval's SessionStart entry".to_string(),
+            });
+        }
+    }
+    Ok(Report {
+        changes,
+        ignored: Vec::new(),
+        pins_behind: Vec::new(),
+        pins_ahead: Vec::new(),
     })
 }
 
