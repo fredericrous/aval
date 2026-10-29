@@ -1,0 +1,16 @@
+amont-provenance-v1
+commit 54a13495996bdc25254939abc83166d051166f9b
+tree e384c0d9b54c23ac4be261800bca2f21096c31d9
+canon d9da9bd9054e0d250685b460267a48a86cf8b873
+patch 7a27dfe14f45c6618e23350f14676eaaac64e1eb
+plan docs/plans/2026-10-29-green-harness-bundle.md 55ce7fd20da6147b2bc95b1d088aae450505f896055a697caef32b33660123ba
+review reviewed ff1f3413e6b41eafe112fcf1f1f6ec8c4dd7e1915f1f83739ec685080ff6dbf9
+preview not-required
+producer amont-agent 3.8.0
+
+-----BEGIN SSH SIGNATURE-----
+U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg7UOvJ8myo4dhW907VFty7T/bUV
+RFQerK+MWJ4bjChwcAAAAQYW1vbnQtcHJvdmVuYW5jZQAAAAAAAAAGc2hhNTEyAAAAUwAA
+AAtzc2gtZWQyNTUxOQAAAEAahZqJs8R7S9Jv5D8U9wPB4G8sIkL6FpQdI2wvpRvo43SMaE
+Z9odcZgrEwvMXduGush7Z7YIQjCzr3+ukGaBIK
+-----END SSH SIGNATURE-----
