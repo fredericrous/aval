@@ -162,7 +162,7 @@ main() {
 
     if [ "$upgrading" -eq 1 ]; then
         printf '  Upgraded. Nothing per repository needs redoing: a gate declared\n'
-        printf '  in amont.conf calls this binary by name and picks up the new one.\n\n'
+        printf '  in greengate.conf calls this binary by name and picks up the new one.\n\n'
         printf '  If the decision format changed, aval check will say so.\n\n'
         return
     fi
@@ -170,7 +170,7 @@ main() {
     printf '    aval check                         # every invariant\n'
     printf '    aval resolve <key>                 # what is decided now\n'
     printf '    aval heads --write                 # regenerate the projection\n\n'
-    printf '  To gate it, add one line to that repository'"'"'s amont.conf:\n\n'
+    printf '  To gate it, add one line to that repository'"'"'s greengate.conf:\n\n'
     printf '    pre-commit    adr   *+.adr.yaml   block   aval check\n\n'
 }
 

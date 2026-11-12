@@ -36,7 +36,7 @@ unrelated property validator; the binary it installs is still `aval`.
 ## Gating a repository
 
 Nothing is gated by installing. To gate a repository, one committed line in its
-[`amont.conf`](https://github.com/fredericrous/amont):
+[`greengate.conf`](https://github.com/fredericrous/amont):
 
 ```text
 pre-commit    adr   *+.adr.yaml   block   aval check
